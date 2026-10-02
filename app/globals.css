@@ -20,6 +20,9 @@
 
 html,
 body {
+  height: 100%;
+  overflow: hidden; /* solo hace scroll el contenido (#app-scroll), como una app nativa */
+  overscroll-behavior: none;
   background: var(--color-bg);
   color: var(--color-text);
   -webkit-tap-highlight-color: transparent;
@@ -36,4 +39,20 @@ body {
 }
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Entrada suave de cada pantalla al cambiar de pestaña */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.animate-page {
+  animation: page-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-page {
+    animation: none;
+  }
 }

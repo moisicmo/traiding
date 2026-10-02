@@ -37,7 +37,7 @@ export default async function AjustesPage() {
   }
 
   return (
-    <main className="safe-top mx-auto w-full max-w-xl px-4 py-6 md:overflow-y-auto">
+    <main className="safe-top mx-auto w-full max-w-xl px-4 py-6">
       <PageHeader title="Ajustes" />
 
       <h2 className="mt-8 text-lg font-semibold">Binance</h2>

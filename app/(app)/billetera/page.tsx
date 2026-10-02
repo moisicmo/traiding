@@ -78,7 +78,7 @@ export default async function BilleteraPage() {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="safe-top mx-auto w-full max-w-2xl px-4 py-6 md:overflow-y-auto">
+    <main className="safe-top mx-auto w-full max-w-2xl px-4 py-6">
       <PageHeader title="Billetera" subtitle="Tus saldos reales en Binance" refresh />
       {children}
     </main>

@@ -6,7 +6,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const { error } = await searchParams
 
   return (
-    <main className="safe-top safe-bottom flex min-h-svh items-center justify-center px-4">
+    <main className="safe-top safe-bottom flex h-full items-center justify-center overflow-y-auto px-4">
       <div className="w-full max-w-sm rounded-2xl border border-border bg-panel p-8 text-center">
         <h1 className="text-xl font-semibold">Trading</h1>
         <p className="mt-1 text-sm text-muted">Entra con tu cuenta de Google</p>

@@ -105,7 +105,7 @@ function OrderCard({ o }: { o: OrderRow }) {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="safe-top mx-auto w-full max-w-2xl px-4 py-6 md:overflow-y-auto">
+    <main className="safe-top mx-auto w-full max-w-2xl px-4 py-6">
       <PageHeader title="Órdenes" subtitle="Tus compras y ventas programadas en Binance" refresh />
       {children}
     </main>

@@ -13,6 +13,11 @@
   --font-sans: system-ui, -apple-system, sans-serif;
 }
 
+/* La app es oscura: así el navegador también pinta oscuras las barras de scroll y los controles */
+:root {
+  color-scheme: dark;
+}
+
 html,
 body {
   background: var(--color-bg);

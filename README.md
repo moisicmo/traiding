@@ -70,7 +70,7 @@ El contenedor se llama `trading-luminia` y está en la red `luminia_default`, la
 - Subdominio: `trading` · Dominio: `luminia.com.bo`
 - Service URL: `http://trading-luminia:4300`
 
-Cloudflare se encarga del HTTPS.
+Cloudflare se encarga del HTTPS. En el `.env` del NAS no olvides `AUTH_URL=https://trading.luminia.com.bo`.
 
 ## En el iPhone
 

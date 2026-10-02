@@ -24,3 +24,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
   },
 })
+
+/** Para server actions: son rutas POST que se pueden llamar directo, así que verifican la sesión otra vez */
+export async function requireUser() {
+  if (authDisabled) return
+  if (!(await auth())) throw new Error('No autorizado')
+}

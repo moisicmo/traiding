@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { LogOut } from 'lucide-react'
+import Link from 'next/link'
+import { Bell, LogOut } from 'lucide-react'
 import clsx from 'clsx'
 import { fmt, get24hChange, INTERVALS, SYMBOLS, type Interval, type Symbol } from '@/lib/binance'
 import { analyze, type Analysis } from '@/lib/analysis'
@@ -79,6 +80,9 @@ export function Dashboard({ userName, logout }: Props) {
                 </div>
               )}
             </div>
+            <Link href="/notificaciones" aria-label="Notificaciones" className="-mr-1 rounded-lg p-2 text-muted hover:bg-panel active:bg-panel md:order-last">
+              <Bell size={18} />
+            </Link>
             <form action={logout} className="md:order-last">
               <button aria-label="Cerrar sesión" title={userName ? `Cerrar sesión (${userName})` : 'Cerrar sesión'} className="-mr-2 rounded-lg p-2 text-muted hover:bg-panel active:bg-panel">
                 <LogOut size={18} />

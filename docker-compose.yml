@@ -1,0 +1,14 @@
+services:
+  trading:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: trading:latest
+    container_name: trading
+    restart: unless-stopped
+    ports:
+      - "4300:4300"
+    # Las claves van en .env (no se suben a git). Copia .env.example → .env y complétalo.
+    env_file: .env
+    environment:
+      - NODE_ENV=production

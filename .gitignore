@@ -1,0 +1,12 @@
+node_modules
+.next
+out
+.env*
+!.env.example
+*.tsbuildinfo
+next-env.d.ts
+.yarn/*
+!.yarn/releases
+.DS_Store
+data
+.vscode

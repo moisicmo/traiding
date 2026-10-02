@@ -1,0 +1,9 @@
+node_modules
+.next
+.git
+.env*
+legacy-html
+Dockerfile
+docker-compose.yml
+*.tsbuildinfo
+.DS_Store

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mi Trading</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Librería de gráficos open source de TradingView -->
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header>
+    <select id="symbol">
+      <option value="BTCUSDT">BTC / USDT</option>
+      <option value="BNBUSDT">BNB / USDT</option>
+      <option value="ETHUSDT">ETH / USDT</option>
+      <option value="SOLUSDT">SOL / USDT</option>
+    </select>
+    <select id="interval">
+      <option value="1m">1m</option>
+      <option value="5m">5m</option>
+      <option value="15m">15m</option>
+      <option value="1h" selected>1h</option>
+      <option value="4h">4h</option>
+      <option value="1d">1d</option>
+    </select>
+    <div class="price"><span id="price">—</span> <span id="change"></span></div>
+  </header>
+
+  <main>
+    <section id="chart"></section>
+
+    <aside>
+      <h2>Simulador (dinero ficticio)</h2>
+      <div class="row"><span>USDT</span><b id="usdt">—</b></div>
+      <div class="row"><span id="coinLabel">Moneda</span><b id="coin">—</b></div>
+      <div class="row"><span>Valor total</span><b id="total">—</b></div>
+      <div class="row"><span>Ganancia / pérdida</span><b id="pnl">—</b></div>
+
+      <label>Monto en USDT <input id="amount" type="number" value="100" min="1" /></label>
+      <div class="buttons">
+        <button id="buy" class="buy">Comprar</button>
+        <button id="sell" class="sell">Vender todo</button>
+      </div>
+      <button id="reset" class="link">Reiniciar cuenta</button>
+
+      <button id="analyze" class="analyze">📊 Analizar últimos 2 meses</button>
+      <button id="clearMarks" class="link" hidden>Quitar marcas del gráfico</button>
+
+      <h3>Historial</h3>
+      <ul id="history"></ul>
+    </aside>
+  </main>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-box">
+      <button id="closeModal" class="close">✕</button>
+      <div id="analysis"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script src="analysis.js"></script>
+</body>
+</html>

@@ -4,12 +4,13 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
-import { ChartCandlestick, ListChecks, Settings, Wallet } from 'lucide-react'
+import { ArrowLeftRight, ChartCandlestick, ListChecks, Settings, Wallet } from 'lucide-react'
 
 const TABS = [
   { href: '/', label: 'Gráfico', Icon: ChartCandlestick },
   { href: '/billetera', label: 'Billetera', Icon: Wallet },
   { href: '/ordenes', label: 'Órdenes', Icon: ListChecks },
+  { href: '/p2p', label: 'P2P', Icon: ArrowLeftRight },
   { href: '/ajustes', label: 'Ajustes', Icon: Settings },
 ]
 
@@ -46,12 +47,12 @@ export function AppNav({ position }: { position: 'top' | 'bottom' }) {
 
   return (
     <nav className="safe-bottom shrink-0 border-t border-border bg-bg md:hidden">
-      <div className="relative grid h-16 grid-cols-4">
+      <div className="relative grid h-16 grid-cols-5">
         {/* Fondo que se desliza hasta la pestaña activa */}
         {activeIndex >= 0 && (
           <div
             aria-hidden
-            className="absolute inset-y-1.5 left-0 w-1/4 px-3 transition-transform duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
+            className="absolute inset-y-1.5 left-0 w-1/5 px-2 transition-transform duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
             style={{ transform: `translateX(${activeIndex * 100}%)` }}
           >
             <div className="h-full rounded-2xl bg-panel" />

@@ -65,7 +65,7 @@ const findOrder = (symbol: string, orderId: number) =>
 
 export function listOrders({ open, limit = 50 }: { open: boolean; limit?: number }): OrderRow[] {
   const where = open ? `status IN ('NEW', 'PARTIALLY_FILLED')` : `status NOT IN ('NEW', 'PARTIALLY_FILLED')`
-  return db().prepare(`SELECT * FROM orders WHERE ${where} ORDER BY updated_at DESC LIMIT ?`).all(limit) as OrderRow[]
+  return (db().prepare(`SELECT * FROM orders WHERE ${where} ORDER BY updated_at DESC LIMIT ?`).all(limit) as OrderRow[]).map((o) => ({ ...o }))
 }
 
 // ===== Mensajes de Telegram =====

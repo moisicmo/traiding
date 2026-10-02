@@ -38,6 +38,24 @@ function migrate(database: DatabaseSync) {
       PRIMARY KEY (symbol, order_id)
     );
 
+    -- Precio del USDT en bolivianos en el P2P de Binance, cada 5 minutos
+    CREATE TABLE IF NOT EXISTS p2p_prices (
+      ts        INTEGER PRIMARY KEY, -- ms
+      buy_best  REAL NOT NULL, -- lo más barato a lo que puedes COMPRAR USDT
+      buy_avg   REAL NOT NULL, -- promedio de los 5 anuncios más baratos
+      sell_best REAL NOT NULL, -- lo más caro a lo que puedes VENDER USDT
+      sell_avg  REAL NOT NULL  -- promedio de los 5 anuncios que más pagan
+    );
+
+    -- Alertas de precio del P2P (se avisan una sola vez)
+    CREATE TABLE IF NOT EXISTS p2p_alerts (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind         TEXT    NOT NULL, -- buy_below | sell_above
+      price        REAL    NOT NULL,
+      created_at   INTEGER NOT NULL,
+      triggered_at INTEGER           -- cuándo se avisó (null = todavía esperando)
+    );
+
     -- Datos sueltos: última sincronización, último error, etc.
     CREATE TABLE IF NOT EXISTS meta (
       key   TEXT PRIMARY KEY,

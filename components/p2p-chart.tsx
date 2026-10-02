@@ -1,15 +1,15 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { ColorType, createChart, LineSeries, type UTCTimestamp } from 'lightweight-charts'
+import { CandlestickSeries, ColorType, createChart, LineSeries } from 'lightweight-charts'
+import type { Bar } from '@/lib/binance'
+import { sma } from '@/lib/indicators'
 import { COLORS } from './price-chart'
 
-type Point = { ts: number; buy: number; sell: number }
+const PRICE = { type: 'price' as const, precision: 3, minMove: 0.001 }
 
-// El gráfico muestra la hora en UTC: corremos los tiempos −4 h para ver la hora de Bolivia
-const LA_PAZ_OFFSET = -4 * 3600
-
-export function P2PChart({ points }: { points: Point[] }) {
+/** Velas del precio del USDT en Bs, con la línea amarilla (20 velas) y la azul (50 velas), igual que el gráfico de BTC */
+export function P2PChart({ candles }: { candles: Bar[] }) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -19,15 +19,24 @@ export function P2PChart({ points }: { points: Point[] }) {
       grid: { vertLines: { color: COLORS.grid }, horzLines: { color: COLORS.grid } },
       timeScale: { timeVisible: true, secondsVisible: false },
       handleScroll: { vertTouchDrag: false },
-      localization: { priceFormatter: (p: number) => p.toFixed(3) },
     })
-    const toLine = (key: 'buy' | 'sell') =>
-      points.map((p) => ({ time: (Math.floor(p.ts / 1000) + LA_PAZ_OFFSET) as UTCTimestamp, value: p[key] }))
-    chart.addSeries(LineSeries, { color: COLORS.sma50, lineWidth: 2, title: 'Comprar' }).setData(toLine('buy'))
-    chart.addSeries(LineSeries, { color: COLORS.up, lineWidth: 2, title: 'Vender' }).setData(toLine('sell'))
+    chart
+      .addSeries(CandlestickSeries, {
+        upColor: COLORS.up,
+        downColor: COLORS.down,
+        borderVisible: false,
+        wickUpColor: COLORS.up,
+        wickDownColor: COLORS.down,
+        priceFormat: PRICE,
+      })
+      .setData(candles)
+    if (candles.length >= 20)
+      chart.addSeries(LineSeries, { color: COLORS.sma20, lineWidth: 1, title: 'SMA 20', priceFormat: PRICE }).setData(sma(candles, 20))
+    if (candles.length >= 50)
+      chart.addSeries(LineSeries, { color: COLORS.sma50, lineWidth: 1, title: 'SMA 50', priceFormat: PRICE }).setData(sma(candles, 50))
     chart.timeScale().fitContent()
     return () => chart.remove()
-  }, [points])
+  }, [candles])
 
-  return <div ref={ref} className="h-64 w-full md:h-80" />
+  return <div ref={ref} className="h-72 w-full md:h-96" />
 }

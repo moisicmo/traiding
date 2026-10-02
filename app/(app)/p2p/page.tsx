@@ -3,20 +3,22 @@ import clsx from 'clsx'
 import { listAlerts, listSnapshots, P2P_AMOUNT, takeSnapshot, type Ad, type Snapshot } from '@/lib/p2p'
 import { PageHeader } from '@/components/page-header'
 import { P2PChart } from '@/components/p2p-chart'
+import { buildCandles, P2P_INTERVALS, type P2PInterval, type P2PSide } from '@/lib/p2p-candles'
 import { P2PAlerts } from '@/components/p2p-alerts'
 
 export const metadata = { title: 'P2P · Trading' }
 
-const HOUR = 3600_000
-const RANGES = { '24h': { label: '24 horas', ms: 24 * HOUR }, '7d': { label: '7 días', ms: 7 * 24 * HOUR } } as const
-type Range = keyof typeof RANGES
+const WEEK = 7 * 86_400_000
+const SIDES: Record<P2PSide, string> = { sell: 'Vender', buy: 'Comprar' }
 
 const bs = (n: number) => n.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 3 })
 const laPazHour = (ms: number) => Number(new Date(ms).toLocaleString('en-US', { timeZone: 'America/La_Paz', hour: 'numeric', hour12: false })) % 24
 
-export default async function P2PPage({ searchParams }: { searchParams: Promise<{ r?: string }> }) {
-  const { r } = await searchParams
-  const range: Range = r === '7d' ? '7d' : '24h'
+export default async function P2PPage({ searchParams }: { searchParams: Promise<{ i?: string; s?: string }> }) {
+  const params = await searchParams
+  const interval: P2PInterval = params.i && params.i in P2P_INTERVALS ? (params.i as P2PInterval) : '1h'
+  const side: P2PSide = params.s === 'buy' ? 'buy' : 'sell'
+  const href = (next: { i?: P2PInterval; s?: P2PSide }) => `/p2p?i=${next.i ?? interval}&s=${next.s ?? side}`
 
   let live: Awaited<ReturnType<typeof takeSnapshot>> | null = null
   let error: string | null = null
@@ -26,8 +28,9 @@ export default async function P2PPage({ searchParams }: { searchParams: Promise<
     error = (e as Error).message
   }
 
-  const history = listSnapshots(RANGES[range].ms)
-  const week = range === '7d' ? history : listSnapshots(RANGES['7d'].ms)
+  const history = listSnapshots(P2P_INTERVALS[interval].history)
+  const candles = buildCandles(history, interval, side)
+  const week = listSnapshots(WEEK)
   const alerts = listAlerts()
   const s = live?.snapshot
   const spread = s ? s.buy_best - s.sell_best : 0
@@ -61,29 +64,26 @@ export default async function P2PPage({ searchParams }: { searchParams: Promise<
         </>
       )}
 
-      <div className="mt-8 flex items-center justify-between">
-        <h2 className="font-semibold">Cómo se movió</h2>
-        <div className="flex rounded-lg border border-border bg-panel p-0.5 text-sm">
-          {(Object.keys(RANGES) as Range[]).map((key) => (
-            <Link
-              key={key}
-              href={`/p2p?r=${key}`}
-              replace
-              scroll={false}
-              className={clsx('rounded-md px-3 py-1 font-medium', key === range ? 'bg-border text-text' : 'text-muted')}
-            >
-              {RANGES[key].label}
-            </Link>
-          ))}
-        </div>
+      <h2 className="mt-8 font-semibold">Precio del USDT en Bs</h2>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Toggle options={(Object.keys(SIDES) as P2PSide[]).map((k) => ({ key: k, label: SIDES[k], href: href({ s: k }) }))} active={side} />
+        <Toggle options={(Object.keys(P2P_INTERVALS) as P2PInterval[]).map((k) => ({ key: k, label: P2P_INTERVALS[k].label, href: href({ i: k }) }))} active={interval} />
       </div>
-      {history.length >= 2 ? (
-        <div className="mt-3 overflow-hidden rounded-2xl border border-border">
-          <P2PChart points={history.map((h) => ({ ts: h.ts, buy: h.buy_best, sell: h.sell_best }))} />
-        </div>
+      {candles.length >= 2 ? (
+        <>
+          <div className="mt-3 overflow-hidden rounded-2xl border border-border">
+            <P2PChart candles={candles} />
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Cada vela = {P2P_INTERVALS[interval].label} · hora de Bolivia · precio de {SIDES[side].toLowerCase()} USDT.
+            {candles.length < 20 && ` La línea amarilla aparece con 20 velas (hay ${candles.length}).`}
+            {candles.length >= 20 && candles.length < 50 && ` La línea azul aparece con 50 velas (hay ${candles.length}).`}
+          </p>
+        </>
       ) : (
         <p className="mt-3 rounded-2xl border border-border bg-panel p-4 text-muted">
-          La app guarda el precio cada 5 minutos desde que está prendida en el NAS. En un rato vas a ver aquí el gráfico.
+          Binance P2P no guarda historial, así que la app junta el precio cada 5 minutos desde que está prendida en el NAS. Todavía no
+          hay suficientes datos para velas de {P2P_INTERVALS[interval].label}: prueba con 15m o vuelve en un rato.
         </p>
       )}
 
@@ -183,6 +183,24 @@ function AdList({ title, ads }: { title: string; ads: Ad[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+function Toggle<T extends string>({ options, active }: { options: { key: T; label: string; href: string }[]; active: T }) {
+  return (
+    <div className="flex rounded-lg border border-border bg-panel p-0.5 text-sm">
+      {options.map((o) => (
+        <Link
+          key={o.key}
+          href={o.href}
+          replace
+          scroll={false}
+          className={clsx('rounded-md px-3 py-1 font-medium', o.key === active ? 'bg-border text-text' : 'text-muted')}
+        >
+          {o.label}
+        </Link>
+      ))}
     </div>
   )
 }

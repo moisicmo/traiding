@@ -63,13 +63,14 @@ docker save trading:latest | gzip > trading.tar.gz
 # y en el NAS: docker compose up -d   (sin --build)
 ```
 
-### Subdominio y HTTPS
+### Subdominio (Cloudflare Tunnel)
 
-1. En tu DNS crea `trading.luminia.com.bo` apuntando a la IP pública del NAS.
-2. **Panel de control → Portal de inicio de sesión → Avanzado → Proxy inverso → Crear**:
-   - Origen: `HTTPS` · `trading.luminia.com.bo` · puerto `443`
-   - Destino: `HTTP` · `localhost` · puerto `4300`
-3. **Panel de control → Seguridad → Certificado**: agrega uno de Let's Encrypt para `trading.luminia.com.bo` y asígnalo a ese proxy inverso.
+El contenedor se llama `trading-luminia` y está en la red `luminia_default`, la misma que usa el túnel. En **Cloudflare → Zero Trust → Networks → Tunnels → Routes → Add published application**:
+
+- Subdominio: `trading` · Dominio: `luminia.com.bo`
+- Service URL: `http://trading-luminia:4300`
+
+Cloudflare se encarga del HTTPS.
 
 ## En el iPhone
 

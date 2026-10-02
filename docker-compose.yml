@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: trading:latest
-    container_name: trading
+    container_name: trading-luminia
     restart: unless-stopped
     ports:
       - "4300:4300"
@@ -12,3 +12,11 @@ services:
     env_file: .env
     environment:
       - NODE_ENV=production
+    # Misma red que el túnel de Cloudflare y el resto de proyectos de Luminia
+    networks:
+      - luminia_default
+
+networks:
+  luminia_default:
+    external: true
+    name: luminia_default

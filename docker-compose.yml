@@ -6,8 +6,8 @@ services:
     image: trading:latest
     container_name: trading-luminia
     restart: unless-stopped
-    ports:
-      - "4300:4300"
+    # Sin "ports": Cloudflare Tunnel entra por la red luminia_default → http://trading-luminia:4300
+    # (así no choca con otros puertos del NAS y nadie puede saltarse Cloudflare)
     # Las claves van en .env (no se suben a git). Copia .env.example → .env y complétalo.
     env_file: .env
     environment:

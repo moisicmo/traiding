@@ -29,9 +29,14 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=4300
 ENV HOSTNAME=0.0.0.0
+ENV DATA_DIR=/app/data
 
 RUN addgroup --system --gid 1001 nodejs \
- && adduser  --system --uid 1001 nextjs
+ && adduser  --system --uid 1001 nextjs \
+ && mkdir -p /app/data && chown nextjs:nodejs /app/data
+
+# Base de datos SQLite: va en un volumen para que no se borre al recompilar
+VOLUME /app/data
 
 # standalone output + archivos estáticos
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./

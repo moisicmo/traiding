@@ -1,8 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import Link from 'next/link'
-import { Bell, LogOut } from 'lucide-react'
 import clsx from 'clsx'
 import { fmt, get24hChange, INTERVALS, SYMBOLS, type Interval, type Symbol } from '@/lib/binance'
 import { analyze, type Analysis } from '@/lib/analysis'
@@ -10,9 +8,7 @@ import { PriceChart } from './price-chart'
 import { Simulator } from './simulator'
 import { AnalysisSheet, type SheetState } from './analysis-sheet'
 
-type Props = { userName: string | null; logout: () => Promise<void> }
-
-export function Dashboard({ userName, logout }: Props) {
+export function Dashboard() {
   const [symbol, setSymbol] = useState<Symbol>('BTCUSDT')
   const [interval, setChartInterval] = useState<Interval>('1h')
   const [price, setPrice] = useState<number | null>(null)
@@ -66,7 +62,7 @@ export function Dashboard({ userName, logout }: Props) {
   const closeSheet = useCallback(() => setSheet(null), [])
 
   return (
-    <div className="flex min-h-svh flex-col md:h-svh">
+    <div className="flex flex-1 flex-col md:min-h-0">
       <header className="safe-top sticky top-0 z-20 border-b border-border bg-bg/95 backdrop-blur">
         <div className="flex flex-col gap-2 px-4 py-3 md:flex-row md:items-center md:gap-3">
           <div className="flex items-center gap-3 md:contents">
@@ -80,14 +76,6 @@ export function Dashboard({ userName, logout }: Props) {
                 </div>
               )}
             </div>
-            <Link href="/notificaciones" aria-label="Notificaciones" className="-mr-1 rounded-lg p-2 text-muted hover:bg-panel active:bg-panel md:order-last">
-              <Bell size={18} />
-            </Link>
-            <form action={logout} className="md:order-last">
-              <button aria-label="Cerrar sesión" title={userName ? `Cerrar sesión (${userName})` : 'Cerrar sesión'} className="-mr-2 rounded-lg p-2 text-muted hover:bg-panel active:bg-panel">
-                <LogOut size={18} />
-              </button>
-            </form>
           </div>
           <Segmented options={INTERVALS.map((i) => ({ value: i, label: i }))} value={interval} onChange={changeInterval} />
         </div>

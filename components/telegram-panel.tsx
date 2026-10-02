@@ -3,7 +3,7 @@
 import { useActionState } from 'react'
 import clsx from 'clsx'
 import type { TelegramStatus } from '@/lib/telegram'
-import { findChats, sendTest, type ActionResult } from '@/app/notificaciones/actions'
+import { findChats, sendTest, type ActionResult } from '@/app/(app)/ajustes/actions'
 
 export function TelegramPanel({ status }: { status: TelegramStatus }) {
   const [chats, findAction, finding] = useActionState(findChats, null)

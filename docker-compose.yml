@@ -13,8 +13,14 @@ services:
     environment:
       - NODE_ENV=production
     # Misma red que el túnel de Cloudflare y el resto de proyectos de Luminia
+    # La base de datos (SQLite) vive en este volumen: sobrevive a "up --build" y a reinicios
+    volumes:
+      - trading-data:/app/data
     networks:
       - luminia_default
+
+volumes:
+  trading-data:
 
 networks:
   luminia_default:

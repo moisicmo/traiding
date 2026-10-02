@@ -4,7 +4,9 @@ import './globals.css'
 export const metadata: Metadata = {
   title: 'Trading',
   description: 'Mi herramienta de trading: gráficos, análisis y simulador',
-  appleWebApp: { capable: true, title: 'Trading', statusBarStyle: 'black-translucent' },
+  // 'black': iOS deja la barra de estado aparte (negra) y la app ocupa exactamente el resto de la pantalla.
+  // Con 'black-translucent' iOS calculaba mal el alto y quedaba un espacio vacío bajo las pestañas.
+  appleWebApp: { capable: true, title: 'Trading', statusBarStyle: 'black' },
 }
 
 export const viewport: Viewport = {

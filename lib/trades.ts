@@ -148,6 +148,8 @@ export type Results = {
   last30: number
   wins: number
   losses: number
+  since: number | null // fecha de tu primera compra/venta en Spot (desde ahí cuenta el total)
+  unrealized: number // cuánto ganarías o perderías si vendieras hoy lo que tienes comprado
 }
 
 const DAY = 86_400_000
@@ -251,5 +253,7 @@ export function computeResults(prices: Map<string, number>): Results {
     last30: ops.filter((o) => o.time >= now - 30 * DAY).reduce((s, o) => s + o.pnl, 0),
     wins: ops.filter((o) => o.pnl > 0).length,
     losses: ops.filter((o) => o.pnl <= 0).length,
+    since: rows.find((t) => STABLES.includes(splitSymbol(t.symbol)[1]))?.time ?? null,
+    unrealized: open.reduce((s, p) => s + (p.pnl ?? 0), 0),
   }
 }

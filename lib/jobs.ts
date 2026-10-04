@@ -3,6 +3,9 @@ import 'server-only'
 import { syncOrders } from './orders'
 import { syncTrades } from './trades'
 import { recordP2P } from './p2p'
+import { getPrices, hasBinanceKeys } from './binance-account'
+import { computeResults } from './trades'
+import { checkGoals } from './goals'
 
 const EVERY_MINUTE = 60_000
 const EVERY_5_MINUTES = 5 * 60_000
@@ -25,5 +28,15 @@ export function startJobs() {
   setTimeout(recordP2P, 10_000)
   setInterval(recordP2P, EVERY_5_MINUTES)
 
-  console.log('[jobs] Órdenes cada minuto · P2P cada 5 minutos')
+  // Metas y racha: avisa cuando cumples una meta y recuerda la racha a las 20:00 (hora de Bolivia)
+  setInterval(async () => {
+    if (!hasBinanceKeys()) return
+    try {
+      await checkGoals(computeResults(await getPrices()).ops)
+    } catch (e) {
+      console.error('[goals] Error al revisar metas:', e)
+    }
+  }, EVERY_5_MINUTES)
+
+  console.log('[jobs] Órdenes cada minuto · P2P y metas cada 5 minutos')
 }

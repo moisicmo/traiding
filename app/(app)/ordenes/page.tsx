@@ -7,6 +7,8 @@ import { PageHeader } from '@/components/page-header'
 import { SetupBinanceCard } from '@/components/setup-binance-card'
 import { PnlChart } from '@/components/pnl-chart'
 import { MonthlyPnl, type Month } from '@/components/monthly-pnl'
+import { GoalsPanel } from '@/components/goals-panel'
+import { computeProgress } from '@/lib/goals'
 
 export const metadata = { title: 'Órdenes · Trading' }
 
@@ -45,10 +47,13 @@ export default async function OrdenesPage() {
   const history = listOrders({ open: false, limit: 30 })
   const results = computeResults(await getPrices())
   const months = monthly(results.ops)
+  const progress = computeProgress(results.ops)
 
   return (
     <Shell>
       {error && <p className="mt-6 rounded-xl bg-down/15 p-4 text-down">{error}</p>}
+
+      <GoalsPanel p={progress} />
 
       <Kpis r={results} openCount={open.length} />
 
@@ -136,7 +141,7 @@ function Kpis({ r, openCount }: { r: Results; openCount: number }) {
   const total = r.wins + r.losses
   const rate = total ? (r.wins / total) * 100 : 0
   return (
-    <section className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <section className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
       <Tile label="Ganancia total" className="col-span-2 lg:col-span-1">
         <p className={clsx('text-4xl font-semibold tracking-tight', tone(r.total))}>
           {money(r.total)} <span className="text-base font-normal text-muted">USDT</span>

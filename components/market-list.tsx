@@ -26,6 +26,7 @@ const FILTERS = {
   watch: { label: '👀 Para mirar', test: (c: Coin) => c.watch },
   up: { label: '↗ Subiendo', test: (c: Coin) => c.trend === 'up' },
   calm: { label: 'Tranquilas', test: (c: Coin) => c.move === 'calm' },
+  beatsBtc: { label: 'Le ganan a BTC', test: (c: Coin) => c.base !== 'BTC' && c.vsBtc30d > 0 },
 } as const
 type Filter = keyof typeof FILTERS
 
@@ -82,7 +83,9 @@ function CoinCard({ c }: { c: Coin }) {
         <CoinIcon base={c.base} />
         <div className="min-w-0 flex-1">
           <p className="truncate font-semibold">{c.name}</p>
-          <p className="text-xs text-muted">{c.base}/USDT</p>
+          <p className="text-xs text-muted">
+            {c.base}/USDT · desde {new Date(c.since).getUTCFullYear()}
+          </p>
         </div>
         <div className="text-right">
           <p className="tabular font-semibold">{fmt(c.price)}</p>
@@ -95,8 +98,19 @@ function CoinCard({ c }: { c: Coin }) {
 
       <div className="mt-3">
         <Sparkline prices={c.spark} sma={c.sparkSma20} up={c.change30d >= 0} />
-        <p className="tabular mt-1 text-[11px] text-muted">
-          30 días: <span className={c.change30d >= 0 ? 'text-up' : 'text-down'}>{c.change30d >= 0 ? '+' : ''}{c.change30d.toFixed(1)}%</span>
+        <p className="tabular mt-1 flex justify-between gap-2 text-[11px] text-muted">
+          <span>
+            30 días: <span className={c.change30d >= 0 ? 'text-up' : 'text-down'}>{c.change30d >= 0 ? '+' : ''}{c.change30d.toFixed(1)}%</span>
+          </span>
+          {c.base !== 'BTC' && (
+            <span>
+              vs Bitcoin:{' '}
+              <span className={c.vsBtc30d >= 0 ? 'text-up' : 'text-down'}>
+                {c.vsBtc30d >= 0 ? '+' : ''}
+                {c.vsBtc30d.toFixed(1)}%
+              </span>
+            </span>
+          )}
         </p>
       </div>
 

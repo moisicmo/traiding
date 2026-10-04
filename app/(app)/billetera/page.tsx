@@ -1,4 +1,5 @@
 import { explainError, getBalances, hasBinanceKeys, type Balance } from '@/lib/binance-account'
+import { setMeta } from '@/lib/db'
 import { PageHeader } from '@/components/page-header'
 import { SetupBinanceCard } from '@/components/setup-binance-card'
 
@@ -25,6 +26,9 @@ export default async function BilleteraPage() {
       </Shell>
     )
   }
+
+  // Para que la revisión de operaciones también mire las monedas que tienes (no solo BTC, BNB, ETH, SOL)
+  setMeta('wallet_assets', JSON.stringify(balances.filter((b) => !b.earn).map((b) => b.asset)))
 
   const total = balances.reduce((sum, b) => sum + (b.value ?? 0), 0)
   // Saldos que valen menos de 1 centavo: los juntamos para no llenar la pantalla

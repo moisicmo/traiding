@@ -104,7 +104,7 @@ export async function getBalances(): Promise<Balance[]> {
 }
 
 /** Precio en USDT de todas las monedas (ruta pública) */
-async function getPrices(): Promise<Map<string, number>> {
+export async function getPrices(): Promise<Map<string, number>> {
   const res = await fetch(`${BASE}/api/v3/ticker/price`, { cache: 'no-store' })
   const list = (await res.json()) as { symbol: string; price: string }[]
   return new Map(list.map((p) => [p.symbol, +p.price]))
@@ -141,3 +141,22 @@ export const getKeyPermissions = () =>
     'GET',
     '/sapi/v1/account/apiRestrictions',
   )
+
+// ===== Operaciones ejecutadas (trades) =====
+
+export type BinanceTrade = {
+  symbol: string
+  id: number
+  orderId: number
+  price: string
+  qty: string
+  quoteQty: string
+  commission: string
+  commissionAsset: string
+  time: number
+  isBuyer: boolean
+}
+
+/** Tus operaciones ejecutadas de un par, desde el id indicado (hasta 1000 por pedido) */
+export const getMyTrades = (symbol: string, fromId: number) =>
+  signed<BinanceTrade[]>('GET', '/api/v3/myTrades', { symbol, fromId, limit: 1000 })

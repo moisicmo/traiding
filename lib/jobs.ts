@@ -1,6 +1,7 @@
 // Tareas automáticas que corren en el servidor (el NAS) mientras la app está prendida.
 import 'server-only'
 import { syncOrders } from './orders'
+import { syncTrades } from './trades'
 import { recordP2P } from './p2p'
 
 const EVERY_MINUTE = 60_000
@@ -12,9 +13,14 @@ export function startJobs() {
   if (globalForJobs.tradingJobsStarted) return // por si Next carga este archivo dos veces
   globalForJobs.tradingJobsStarted = true
 
-  // Revisa tus órdenes de Binance cada minuto (la primera, a los 5 s de arrancar)
-  setTimeout(syncOrders, 5_000)
-  setInterval(syncOrders, EVERY_MINUTE)
+  // Revisa tus órdenes y operaciones de Binance cada minuto (la primera, a los 5 s de arrancar).
+  // Primero las órdenes: así las operaciones de órdenes que ya avisamos no se avisan dos veces.
+  const syncAccount = async () => {
+    await syncOrders()
+    await syncTrades()
+  }
+  setTimeout(syncAccount, 5_000)
+  setInterval(syncAccount, EVERY_MINUTE)
   // Guarda el precio del USDT en el P2P (USDT/BOB) cada 5 minutos y revisa tus alertas
   setTimeout(recordP2P, 10_000)
   setInterval(recordP2P, EVERY_5_MINUTES)

@@ -38,6 +38,21 @@ function migrate(database: DatabaseSync) {
       PRIMARY KEY (symbol, order_id)
     );
 
+    -- Cada compra o venta ejecutada (con la comisión exacta que cobró Binance)
+    CREATE TABLE IF NOT EXISTS trades (
+      symbol           TEXT    NOT NULL,
+      id               INTEGER NOT NULL,
+      order_id         INTEGER NOT NULL,
+      is_buyer         INTEGER NOT NULL, -- 1 = compra, 0 = venta
+      price            REAL    NOT NULL,
+      qty              REAL    NOT NULL,
+      quote_qty        REAL    NOT NULL,
+      commission       REAL    NOT NULL,
+      commission_asset TEXT    NOT NULL,
+      time             INTEGER NOT NULL, -- ms
+      PRIMARY KEY (symbol, id)
+    );
+
     -- Precio del USDT en bolivianos en el P2P de Binance, cada 5 minutos
     CREATE TABLE IF NOT EXISTS p2p_prices (
       ts        INTEGER PRIMARY KEY, -- ms

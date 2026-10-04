@@ -8,8 +8,8 @@ import { PriceChart } from './price-chart'
 import { Simulator } from './simulator'
 import { AnalysisSheet, type SheetState } from './analysis-sheet'
 
-export function Dashboard() {
-  const [symbol, setSymbol] = useState<Symbol>('BTCUSDT')
+export function Dashboard({ initialSymbol = 'BTCUSDT' }: { initialSymbol?: Symbol }) {
+  const [symbol, setSymbol] = useState<Symbol>(initialSymbol)
   const [interval, setChartInterval] = useState<Interval>('1h')
   const [price, setPrice] = useState<number | null>(null)
   const [change, setChange] = useState<number | null>(null)
@@ -66,7 +66,7 @@ export function Dashboard() {
       <header className="safe-top sticky top-0 z-20 border-b border-border bg-bg/95 backdrop-blur">
         <div className="flex flex-col gap-2 px-4 py-3 md:flex-row md:items-center md:gap-3">
           <div className="flex items-center gap-3 md:contents">
-            <Segmented options={SYMBOLS.map((s) => ({ value: s.value, label: s.label }))} value={symbol} onChange={changeSymbol} />
+            <Segmented options={symbolOptions(symbol)} value={symbol} onChange={changeSymbol} />
             <div className="tabular ml-auto text-right leading-tight md:order-last">
               <div className="text-lg font-semibold md:text-xl">{price ? fmt(price) : '—'}</div>
               {change !== null && (
@@ -108,6 +108,13 @@ export function Dashboard() {
       {sheet && <AnalysisSheet state={sheet} onClose={closeSheet} onShowOnChart={showOnChart} />}
     </div>
   )
+}
+
+// Los 4 accesos rápidos + la moneda abierta desde Mercado, si no es una de ellas
+function symbolOptions(current: Symbol) {
+  const list = SYMBOLS.map((s) => ({ value: s.value as Symbol, label: s.label as string }))
+  if (!list.some((s) => s.value === current)) list.push({ value: current, label: current.replace('USDT', '') })
+  return list
 }
 
 function Segmented<T extends string>({

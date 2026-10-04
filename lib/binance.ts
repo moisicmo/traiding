@@ -5,6 +5,7 @@ import type { UTCTimestamp } from 'lightweight-charts'
 export const REST = 'https://api.binance.com/api/v3'
 export const WS = 'wss://stream.binance.com:9443/ws'
 
+// Accesos rápidos en el gráfico (se puede abrir cualquier otra moneda desde Mercado)
 export const SYMBOLS = [
   { value: 'BTCUSDT', label: 'BTC' },
   { value: 'BNBUSDT', label: 'BNB' },
@@ -14,7 +15,10 @@ export const SYMBOLS = [
 
 export const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
 
-export type Symbol = (typeof SYMBOLS)[number]['value']
+/** Un par contra USDT, por ejemplo "BTCUSDT" */
+export type Symbol = string
+
+export const isUsdtSymbol = (s: string) => /^[A-Z0-9]{2,15}USDT$/.test(s)
 export type Interval = (typeof INTERVALS)[number]
 
 export type Bar = {

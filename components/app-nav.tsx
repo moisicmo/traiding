@@ -7,14 +7,16 @@ import clsx from 'clsx'
 import { ArrowLeftRight, ChartCandlestick, ListChecks, Settings, Wallet } from 'lucide-react'
 
 const TABS = [
-  { href: '/', label: 'Gráfico', Icon: ChartCandlestick },
+  { href: '/', label: 'Mercado', Icon: ChartCandlestick },
   { href: '/billetera', label: 'Billetera', Icon: Wallet },
   { href: '/ordenes', label: 'Órdenes', Icon: ListChecks },
   { href: '/p2p', label: 'P2P', Icon: ArrowLeftRight },
   { href: '/ajustes', label: 'Ajustes', Icon: Settings },
 ]
 
-const matches = (pathname: string, href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href))
+// Mercado también queda marcado mientras ves el gráfico de una moneda
+const matches = (pathname: string, href: string) =>
+  href === '/' ? pathname === '/' || pathname.startsWith('/grafico') : pathname.startsWith(href)
 
 // Computadora: menú arriba. iPhone: barra de pestañas abajo, como una app.
 export function AppNav({ position }: { position: 'top' | 'bottom' }) {

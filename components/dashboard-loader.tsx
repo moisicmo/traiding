@@ -8,6 +8,6 @@ const Dashboard = dynamic(() => import('./dashboard').then((m) => m.Dashboard), 
   loading: () => <div className="flex flex-1 items-center justify-center py-20 text-muted">Cargando…</div>,
 })
 
-export function DashboardLoader() {
-  return <Dashboard />
+export function DashboardLoader({ symbol }: { symbol?: string }) {
+  return <Dashboard initialSymbol={symbol} />
 }

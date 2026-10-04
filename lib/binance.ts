@@ -51,11 +51,19 @@ export async function getKlines(symbol: Symbol, interval: Interval, limit = 500)
 }
 
 /** Variación del precio en las últimas 24 horas, en % */
-export async function get24hChange(symbol: Symbol): Promise<number> {
+/**
+ * Un par pausado o eliminado por Binance sigue devolviendo sus últimos datos, pero congelados:
+ * lo detectamos porque la hora de esos datos (closeTime) es vieja. En un par activo es "ahora".
+ */
+export const STALE_AFTER_MS = 60 * 60_000
+export const isStale = (closeTime: number) => Date.now() - closeTime > STALE_AFTER_MS
+
+/** Variación del precio en 24 h (%) y si el par está pausado/eliminado en Binance */
+export async function get24hChange(symbol: Symbol): Promise<{ change: number; stale: boolean }> {
   const res = await fetch(`${REST}/ticker/24hr?symbol=${symbol}`)
   if (!res.ok) throw new Error(`Binance respondió ${res.status}`)
-  const t = (await res.json()) as { priceChangePercent: string }
-  return +t.priceChangePercent
+  const t = (await res.json()) as { priceChangePercent: string; closeTime: number }
+  return { change: +t.priceChangePercent, stale: isStale(t.closeTime) }
 }
 
 export const coinName = (symbol: Symbol) => symbol.replace('USDT', '')

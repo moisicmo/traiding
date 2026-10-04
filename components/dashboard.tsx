@@ -13,13 +13,18 @@ export function Dashboard({ initialSymbol = 'BTCUSDT' }: { initialSymbol?: Symbo
   const [interval, setChartInterval] = useState<Interval>('1h')
   const [price, setPrice] = useState<number | null>(null)
   const [change, setChange] = useState<number | null>(null)
+  const [stale, setStale] = useState(false)
   const [sheet, setSheet] = useState<SheetState | null>(null)
   const [highlight, setHighlight] = useState<Analysis | null>(null)
 
   useEffect(() => {
     let cancelled = false
     get24hChange(symbol)
-      .then((c) => !cancelled && setChange(c))
+      .then((t) => {
+        if (cancelled) return
+        setChange(t.change)
+        setStale(t.stale)
+      })
       .catch(() => {})
     return () => {
       cancelled = true
@@ -34,6 +39,7 @@ export function Dashboard({ initialSymbol = 'BTCUSDT' }: { initialSymbol?: Symbo
     setSymbol(s)
     setPrice(null)
     setChange(null)
+    setStale(false)
     setHighlight(null)
   }
 
@@ -80,6 +86,12 @@ export function Dashboard({ initialSymbol = 'BTCUSDT' }: { initialSymbol?: Symbo
           <Segmented options={INTERVALS.map((i) => ({ value: i, label: i }))} value={interval} onChange={changeInterval} />
         </div>
       </header>
+
+      {stale && (
+        <p className="mx-4 mt-3 rounded-xl bg-down/15 p-3 text-sm text-down">
+          ⚠️ Binance pausó o eliminó el par {symbol.replace('USDT', '/USDT')}: no se puede comprar ni vender, y el precio que ves está congelado.
+        </p>
+      )}
 
       <main className="flex flex-1 flex-col md:min-h-0 md:flex-row">
         <section className="h-[58svh] shrink-0 md:h-auto md:min-w-0 md:flex-1">

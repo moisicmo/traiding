@@ -3,7 +3,7 @@
 // movimiento), aparece sola; si una deja de cumplirlas, sale. Las que no pasan se muestran aparte
 // con el motivo, para aprender a reconocerlas.
 import 'server-only'
-import { REST, toBar, type Bar } from './binance'
+import { isStale, REST, toBar, type Bar } from './binance'
 import { pct, smaAt } from './indicators'
 
 /** Las reglas del filtro (se muestran en la pantalla tal cual) */
@@ -65,7 +65,7 @@ const FIVE_MIN = { next: { revalidate: 300 } }
 const ONE_DAY = { next: { revalidate: 86_400 } } // la fecha de inicio no cambia: se pide una vez al día
 const YEAR = 365.25 * 86_400_000
 
-type Ticker = { symbol: string; lastPrice: string; priceChangePercent: string; quoteVolume: string }
+type Ticker = { symbol: string; lastPrice: string; priceChangePercent: string; quoteVolume: string; closeTime: number }
 type RawKline = Parameters<typeof toBar>[0] & { 7: string; 8: number }
 
 export async function getMarket(): Promise<Market> {
@@ -95,6 +95,7 @@ export async function getMarket(): Promise<Market> {
 async function evaluate(t: Ticker, base: string): Promise<Coin | Rejected> {
   const name = NAMES[base] ?? base
   const reasons: string[] = []
+  if (isStale(t.closeTime)) return { base, name, reasons: ['No se opera en Binance ahora (par pausado o eliminado)'] }
   if (MEMES.has(base)) reasons.push('Es una moneda meme (vale por popularidad)')
 
   // ¿Desde cuándo existe en Binance? (la primera vela mensual)

@@ -71,6 +71,32 @@ function migrate(database: DatabaseSync) {
       triggered_at INTEGER           -- cuándo se avisó (null = todavía esperando)
     );
 
+    -- Bot en vivo con dinero de mentira: operaciones abiertas y cerradas
+    CREATE TABLE IF NOT EXISTS bot_positions (
+      symbol     TEXT    PRIMARY KEY,
+      entry      REAL    NOT NULL,
+      qty        REAL    NOT NULL,
+      size       REAL    NOT NULL, -- USDT puestos
+      entry_time INTEGER NOT NULL  -- ms
+    );
+    CREATE TABLE IF NOT EXISTS bot_trades (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol     TEXT    NOT NULL,
+      entry      REAL    NOT NULL,
+      exit       REAL    NOT NULL,
+      size       REAL    NOT NULL,
+      pnl        REAL    NOT NULL, -- USDT, con comisiones
+      reason     TEXT    NOT NULL, -- sl | cross | manual
+      entry_time INTEGER NOT NULL,
+      exit_time  INTEGER NOT NULL
+    );
+    -- Cuánto vale la cartera del bot y la de "no tocar", una vez por hora
+    CREATE TABLE IF NOT EXISTS bot_equity (
+      ts    INTEGER PRIMARY KEY,
+      value REAL NOT NULL,
+      hold  REAL NOT NULL
+    );
+
     -- Datos sueltos: última sincronización, último error, etc.
     CREATE TABLE IF NOT EXISTS meta (
       key   TEXT PRIMARY KEY,

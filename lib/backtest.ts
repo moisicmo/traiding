@@ -1,26 +1,64 @@
 // Backtest: "si este bot hubiera funcionado en el pasado, ¿cuánto habría ganado o perdido?"
 // Recorre las velas una por una, como si fuera en vivo: en cada vela solo mira lo que YA pasó.
-//
-// Estrategia "rebote en la línea amarilla" (la de tu compra de BNB):
-//   COMPRA  cuando viene subiendo (amarilla sobre azul y la azul en alza) y el precio baja a tocar la amarilla.
-//           Compra al ABRIR la vela siguiente (nunca al precio de una vela que ya cerró: eso sería trampa).
-//   VENDE   cuando llega al take profit, al stop loss, o si pasan demasiadas velas sin que pase nada.
-//           Si en la misma vela se tocan los dos, contamos el stop loss (somos pesimistas a propósito).
+// Siempre compra al ABRIR la vela siguiente a la señal (nunca al precio de una vela que ya cerró:
+// eso sería trampa), cobra 0,1% de comisión por lado y, si en una vela se tocan la ganancia y
+// la pérdida, cuenta la pérdida (somos pesimistas a propósito).
 import type { Bar } from './binance'
 import { smaAt } from './indicators'
 
 export const FEE = 0.001 // 0,1% por operación, como Binance
 
-export type Params = {
-  tp: number // take profit, % (ej. 3)
-  sl: number // stop loss, % (ej. 2)
-  maxBars: number // si no pasa nada en estas velas, vende igual
-  stake: number // USDT por operación (siempre el mismo monto, sin "interés compuesto")
+export type Strategy = 'bounce' | 'trend' | 'dca'
+export type BtInterval = '4h' | '1d'
+
+export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short: string; how: string[] }> = {
+  bounce: {
+    emoji: '🟡',
+    label: 'Rebote en la amarilla',
+    short: 'Rebote',
+    how: [
+      'Compra cuando viene subiendo (amarilla sobre azul, y la azul en alza) y el precio baja a tocar la amarilla. Igual que tu compra de BNB.',
+      'Vende al llegar a la ganancia (take profit), a la pérdida máxima (stop loss), o si pasan demasiadas velas sin que pase nada.',
+      'Busca ganancias chicas y frecuentes.',
+    ],
+  },
+  trend: {
+    emoji: '📈',
+    label: 'Seguir la tendencia',
+    short: 'Tendencia',
+    how: [
+      'Compra cuando la amarilla cruza hacia ARRIBA a la azul: empieza una subida.',
+      'Vende cuando la amarilla cruza hacia ABAJO a la azul (se acabó la subida), o en el stop loss si cae de golpe.',
+      'Acierta pocas veces, pero cuando acierta se queda en subidas grandes. Hay que aguantar varias pérdidas chicas seguidas.',
+    ],
+  },
+  dca: {
+    emoji: '🗓️',
+    label: 'Compra semanal',
+    short: 'Semanal',
+    how: [
+      'Reparte los 100 USDT en partes iguales y compra un poquito cada semana, sin mirar el gráfico.',
+      'Nunca vende: al final se cuenta cuánto vale lo que juntó.',
+      'Es la más simple y la que menos estrés da: no hay que adivinar el momento.',
+    ],
+  },
 }
 
-export const DEFAULT_PARAMS: Params = { tp: 3, sl: 2, maxBars: 30, stake: 100 }
+export type Params = {
+  tp: number // take profit, % (rebote)
+  sl: number // stop loss, % (rebote y tendencia)
+  maxBars: number // vender igual si pasan estas velas (rebote)
+  stake: number // USDT por operación / total a invertir (siempre 100, sin "interés compuesto")
+}
 
-export type ExitReason = 'tp' | 'sl' | 'time'
+/** Configuración recomendada de cada estrategia (la que mejor funcionó en las pruebas, sin exagerar) */
+export function defaultParams(strategy: Strategy, interval: BtInterval): Params {
+  if (strategy === 'trend') return { tp: 0, sl: 8, maxBars: 0, stake: 100 }
+  if (strategy === 'dca') return { tp: 0, sl: 0, maxBars: 0, stake: 100 }
+  return { tp: 5, sl: 3, maxBars: interval === '4h' ? 42 : 10, stake: 100 }
+}
+
+export type ExitReason = 'tp' | 'sl' | 'time' | 'cross'
 
 export type Trade = {
   entryTime: number // ms
@@ -34,96 +72,177 @@ export type Trade = {
 }
 
 export type Stats = {
-  trades: number
+  trades: number // operaciones (en compra semanal: cantidad de compras)
   wins: number
   losses: number
   winRate: number // %
-  total: number // USDT
-  totalPct: number // % sobre el monto de una operación
+  total: number // USDT ganados o perdidos
   avgWin: number // %
   avgLoss: number // %
-  best: number // %
-  worst: number // %
   maxDrawdown: number // USDT: la peor caída desde un máximo de ganancia
   worstStreak: number // pérdidas seguidas
-  buyHold: number // USDT: si hubieras comprado al inicio y no tocabas nada
+  buyHold: number // USDT: si hubieras comprado 100 al inicio y no tocabas nada
   from: number // ms
   to: number // ms
 }
 
-export type Result = { trades: Trade[]; stats: Stats }
+export type Result = {
+  strategy: Strategy
+  trades: Trade[]
+  stats: Stats
+  equity: { time: number; value: number }[] // ganancia acumulada a lo largo del tiempo
+}
 
-/** ¿En esta vela se cumple la regla de compra? Solo usa velas hasta i (inclusive). */
-export function entrySignal(bars: Bar[], i: number): boolean {
-  if (i < 60) return false
+const START = 60 // las primeras 60 velas solo sirven para calcular las líneas
+const net = (entry: number, exit: number) => (exit / entry) * (1 - FEE) * (1 - FEE) - 1
+
+export function runStrategy(bars: Bar[], strategy: Strategy, p: Params, interval: BtInterval): Result {
+  if (strategy === 'dca') return runDca(bars, p, interval)
+  const trades = strategy === 'trend' ? tradeTrend(bars, p) : tradeBounce(bars, p)
+  return { strategy, trades, stats: tradeStats(bars, trades), equity: tradeEquity(bars, trades) }
+}
+
+// ===== Rebote en la amarilla =====
+
+/** ¿En esta vela se cumple la regla de compra del rebote? Solo usa velas hasta i (inclusive). */
+export function bounceSignal(bars: Bar[], i: number): boolean {
+  if (i < START) return false
   const s20 = smaAt(bars, i, 20)!
   const s50 = smaAt(bars, i, 50)!
-  const s50before = smaAt(bars, i - 10, 50)!
-  const rising = s20 > s50 && s50 > s50before
+  const rising = s20 > s50 && s50 > smaAt(bars, i - 10, 50)!
   const b = bars[i]
   // "Tocar" = bajó hasta la amarilla pero cerró cerca o encima de ella (igual que en el análisis)
   const touch = b.low <= s20 * 1.005 && b.close >= s20 * 0.99
   return rising && touch
 }
 
-export function runBacktest(bars: Bar[], p: Params = DEFAULT_PARAMS): Result {
+function tradeBounce(bars: Bar[], p: Params): Trade[] {
   const trades: Trade[] = []
-  let i = 60
-  while (i < bars.length - 1) {
-    if (!entrySignal(bars, i)) {
-      i++
-      continue
-    }
-    // Compra al abrir la vela siguiente
+  for (let i = START; i < bars.length - 1; i++) {
+    if (!bounceSignal(bars, i)) continue
     const entryIdx = i + 1
     const entry = bars[entryIdx].open
     const tpPrice = entry * (1 + p.tp / 100)
     const slPrice = entry * (1 - p.sl / 100)
-
-    let exitIdx = -1
-    let exit = 0
-    let reason: ExitReason = 'time'
-    for (let j = entryIdx; j < bars.length; j++) {
+    let exit: { idx: number; price: number; reason: ExitReason } | null = null
+    for (let j = entryIdx; j < bars.length && !exit; j++) {
       const b = bars[j]
-      const hitSl = b.low <= slPrice
-      const hitTp = b.high >= tpPrice
-      if (hitSl) {
-        // Si abrió por debajo del stop (un "salto"), se vende a ese precio, no al stop
-        ;[exitIdx, exit, reason] = [j, Math.min(slPrice, b.open), 'sl']
-        break
-      }
-      if (hitTp) {
-        ;[exitIdx, exit, reason] = [j, Math.max(tpPrice, b.open), 'tp']
-        break
-      }
-      if (j - entryIdx + 1 >= p.maxBars) {
-        ;[exitIdx, exit, reason] = [j, b.close, 'time']
-        break
-      }
+      // Si abrió por debajo del stop (un "salto"), se vende a ese precio, no al stop
+      if (b.low <= slPrice) exit = { idx: j, price: Math.min(slPrice, b.open), reason: 'sl' }
+      else if (b.high >= tpPrice) exit = { idx: j, price: Math.max(tpPrice, b.open), reason: 'tp' }
+      else if (j - entryIdx + 1 >= p.maxBars) exit = { idx: j, price: b.close, reason: 'time' }
     }
-    if (exitIdx === -1) break // la última operación todavía estaría abierta: no la contamos
-
-    const net = (exit / entry) * (1 - FEE) * (1 - FEE) - 1
-    trades.push({
-      entryTime: bars[entryIdx].time * 1000,
-      entry,
-      exitTime: bars[exitIdx].time * 1000,
-      exit,
-      reason,
-      pnlPct: net * 100,
-      pnl: net * p.stake,
-      bars: exitIdx - entryIdx + 1,
-    })
-    i = exitIdx + 1 // una operación a la vez
+    if (!exit) break // la última operación todavía estaría abierta: no la contamos
+    trades.push(makeTrade(bars, entryIdx, entry, exit.idx, exit.price, exit.reason, p.stake))
+    i = exit.idx // una operación a la vez
   }
-  return { trades, stats: stats(bars, trades, p) }
+  return trades
 }
 
-function stats(bars: Bar[], trades: Trade[], p: Params): Stats {
+// ===== Seguir la tendencia =====
+
+const above = (bars: Bar[], i: number) => smaAt(bars, i, 20)! > smaAt(bars, i, 50)!
+
+function tradeTrend(bars: Bar[], p: Params): Trade[] {
+  const trades: Trade[] = []
+  for (let i = START; i < bars.length - 1; i++) {
+    // Señal: en esta vela la amarilla pasó a estar encima de la azul (cruce hacia arriba)
+    if (!(above(bars, i) && !above(bars, i - 1))) continue
+    const entryIdx = i + 1
+    const entry = bars[entryIdx].open
+    const slPrice = entry * (1 - p.sl / 100)
+    let exit: { idx: number; price: number; reason: ExitReason } | null = null
+    for (let j = entryIdx; j < bars.length && !exit; j++) {
+      const b = bars[j]
+      if (b.low <= slPrice) exit = { idx: j, price: Math.min(slPrice, b.open), reason: 'sl' }
+      // Si la vela anterior cerró con la amarilla debajo de la azul, vende al abrir esta
+      else if (j > entryIdx && !above(bars, j - 1)) exit = { idx: j, price: b.open, reason: 'cross' }
+    }
+    if (!exit) break
+    trades.push(makeTrade(bars, entryIdx, entry, exit.idx, exit.price, exit.reason, p.stake))
+    i = exit.idx
+  }
+  return trades
+}
+
+// ===== Compra semanal =====
+
+function runDca(bars: Bar[], p: Params, interval: BtInterval): Result {
+  const step = interval === '4h' ? 42 : 7 // velas que hay en una semana
+  const buys: number[] = []
+  for (let i = START; i < bars.length; i += step) buys.push(i)
+  const each = p.stake / buys.length
+
+  // Cuánto se iría ganando (o perdiendo) semana a semana: lo que vale lo juntado − lo invertido
+  let qty = 0
+  let invested = 0
+  let peak = 0
+  let maxDrawdown = 0
+  const equity: Result['equity'] = []
+  for (let k = 0; k < buys.length; k++) {
+    const i = buys[k]
+    qty += (each * (1 - FEE)) / bars[i].open
+    invested += each
+    const value = qty * bars[i].close * (1 - FEE) - invested
+    equity.push({ time: bars[i].time * 1000, value })
+    peak = Math.max(peak, value)
+    maxDrawdown = Math.max(maxDrawdown, peak - value)
+  }
+  const last = bars[bars.length - 1]
+  const total = qty * last.close * (1 - FEE) - invested
+  equity.push({ time: last.time * 1000, value: total })
+
+  return {
+    strategy: 'dca',
+    trades: [],
+    stats: {
+      ...emptyStats(bars),
+      trades: buys.length,
+      total,
+      maxDrawdown: Math.max(maxDrawdown, peak - total),
+    },
+    equity,
+  }
+}
+
+// ===== Cálculos comunes =====
+
+function makeTrade(bars: Bar[], entryIdx: number, entry: number, exitIdx: number, exit: number, reason: ExitReason, stake: number): Trade {
+  const n = net(entry, exit)
+  return {
+    entryTime: bars[entryIdx].time * 1000,
+    entry,
+    exitTime: bars[exitIdx].time * 1000,
+    exit,
+    reason,
+    pnlPct: n * 100,
+    pnl: n * stake,
+    bars: exitIdx - entryIdx + 1,
+  }
+}
+
+function emptyStats(bars: Bar[]): Stats {
+  const first = bars[START] ?? bars[0]
+  const last = bars[bars.length - 1]
+  return {
+    trades: 0,
+    wins: 0,
+    losses: 0,
+    winRate: 0,
+    total: 0,
+    avgWin: 0,
+    avgLoss: 0,
+    maxDrawdown: 0,
+    worstStreak: 0,
+    buyHold: net(first.open, last.close) * 100,
+    from: first.time * 1000,
+    to: last.time * 1000,
+  }
+}
+
+function tradeStats(bars: Bar[], trades: Trade[]): Stats {
   const wins = trades.filter((t) => t.pnl > 0)
   const losses = trades.filter((t) => t.pnl <= 0)
-  const total = trades.reduce((s, t) => s + t.pnl, 0)
-
   let peak = 0
   let equity = 0
   let maxDrawdown = 0
@@ -136,26 +255,27 @@ function stats(bars: Bar[], trades: Trade[], p: Params): Stats {
     streak = t.pnl <= 0 ? streak + 1 : 0
     worstStreak = Math.max(worstStreak, streak)
   }
-
   const avg = (list: Trade[]) => (list.length ? list.reduce((s, t) => s + t.pnlPct, 0) / list.length : 0)
-  const first = bars[60] ?? bars[0]
-  const last = bars[bars.length - 1]
   return {
+    ...emptyStats(bars),
     trades: trades.length,
     wins: wins.length,
     losses: losses.length,
     winRate: trades.length ? (wins.length / trades.length) * 100 : 0,
-    total,
-    totalPct: (total / p.stake) * 100,
+    total: equity,
     avgWin: avg(wins),
     avgLoss: avg(losses),
-    best: Math.max(0, ...trades.map((t) => t.pnlPct)),
-    worst: Math.min(0, ...trades.map((t) => t.pnlPct)),
     maxDrawdown,
     worstStreak,
-    buyHold: ((last.close / first.open) * (1 - FEE) * (1 - FEE) - 1) * p.stake,
-    from: first.time * 1000,
-    to: last.time * 1000,
   }
 }
 
+function tradeEquity(bars: Bar[], trades: Trade[]): Result['equity'] {
+  const points = [{ time: (bars[START] ?? bars[0]).time * 1000, value: 0 }]
+  let total = 0
+  for (const t of trades) {
+    total += t.pnl
+    points.push({ time: t.exitTime, value: total })
+  }
+  return points
+}

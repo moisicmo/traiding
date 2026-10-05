@@ -2,11 +2,13 @@
 import 'server-only'
 import { REST, toBar, type Bar } from './binance'
 
-export const BT_INTERVALS = {
+import type { BtInterval } from './backtest'
+
+export const BT_INTERVALS: Record<BtInterval, { label: string; bars: number }> = {
   '4h': { label: 'Velas de 4 horas', bars: 4400 }, // ~2 años
   '1d': { label: 'Velas de 1 día', bars: 1460 }, // ~4 años (o desde que existe)
-} as const
-export type BtInterval = keyof typeof BT_INTERVALS
+}
+export type { BtInterval }
 
 export async function getHistory(symbol: string, interval: BtInterval): Promise<Bar[]> {
   const total = BT_INTERVALS[interval].bars

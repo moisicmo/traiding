@@ -20,7 +20,7 @@ export function BotForm({ coins, symbol, interval, strategy: initial, params }: 
 
   return (
     <form method="get" action="/bot" className="mt-3 rounded-2xl border border-border bg-panel p-4">
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         {(Object.keys(STRATEGIES) as Strategy[]).map((s) => (
           <label
             key={s}
@@ -53,13 +53,18 @@ export function BotForm({ coins, symbol, interval, strategy: initial, params }: 
             <option value="1d">Velas de 1 día (~4 años)</option>
           </select>
         </Field>
-        {strategy === 'bounce' && (
+        {strategy === 'dip' && (
+          <Field label="Comprar si baja %">
+            <input key={`dip-${strategy}`} name="dip" inputMode="decimal" defaultValue={p.dip} className="input tabular" />
+          </Field>
+        )}
+        {(strategy === 'bounce' || strategy === 'dip') && (
           <Field label="Ganancia %">
             <input key={`tp-${strategy}`} name="tp" inputMode="decimal" defaultValue={p.tp} className="input tabular" />
           </Field>
         )}
         {strategy !== 'dca' && (
-          <Field label="Stop loss %">
+          <Field label={strategy === 'dip' ? 'Stop loss % (0 = sin)' : 'Stop loss %'}>
             <input key={`sl-${strategy}`} name="sl" inputMode="decimal" defaultValue={p.sl} className="input tabular" />
           </Field>
         )}

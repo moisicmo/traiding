@@ -7,7 +7,7 @@ import type { Bar } from './binance'
 
 export const FEE = 0.001 // 0,1% por operación, como Binance
 
-export type Strategy = 'bounce' | 'trend' | 'dca'
+export type Strategy = 'bounce' | 'trend' | 'dca' | 'dip'
 export type BtInterval = '4h' | '1d'
 
 export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short: string; how: string[] }> = {
@@ -31,6 +31,16 @@ export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short:
       'Acierta pocas veces, pero cuando acierta se queda en subidas grandes. Hay que aguantar varias pérdidas chicas seguidas.',
     ],
   },
+  dip: {
+    emoji: '🎯',
+    label: 'Tu estrategia: comprar en la caída',
+    short: 'Tuya',
+    how: [
+      'Después de una vela que cerró bajando, pone una compra límite un poco más abajo (como tu compra de BNB a 765,27 cuando estaba en ~774).',
+      'Cuando se compra, pone la venta límite un poco más arriba. Stop loss opcional: con 0 no hay stop, como haces hoy.',
+      'Si al final quedó algo comprado sin vender, se cuenta con el precio de hoy (así no se esconden las pérdidas de lo que nunca rebotó).',
+    ],
+  },
   dca: {
     emoji: '🗓️',
     label: 'Compra semanal',
@@ -47,17 +57,20 @@ export type Params = {
   tp: number // take profit, % (rebote)
   sl: number // stop loss, % (rebote y tendencia)
   maxBars: number // vender igual si pasan estas velas (rebote)
+  dip: number // tu estrategia: comprar este % debajo del precio
   stake: number // USDT por operación / total a invertir (siempre 100, sin "interés compuesto")
 }
 
 /** Configuración recomendada de cada estrategia (la que mejor funcionó en las pruebas, sin exagerar) */
 export function defaultParams(strategy: Strategy, interval: BtInterval): Params {
-  if (strategy === 'trend') return { tp: 0, sl: 8, maxBars: 0, stake: 100 }
-  if (strategy === 'dca') return { tp: 0, sl: 0, maxBars: 0, stake: 100 }
-  return { tp: 5, sl: 3, maxBars: interval === '4h' ? 42 : 10, stake: 100 }
+  if (strategy === 'trend') return { tp: 0, sl: 8, maxBars: 0, dip: 0, stake: 100 }
+  if (strategy === 'dca') return { tp: 0, sl: 0, maxBars: 0, dip: 0, stake: 100 }
+  // Tus números de BNB: compra ~1,5% abajo, vende ~2% arriba, sin stop loss
+  if (strategy === 'dip') return { tp: 2, sl: 0, maxBars: 0, dip: 1.5, stake: 100 }
+  return { tp: 5, sl: 3, maxBars: interval === '4h' ? 42 : 10, dip: 0, stake: 100 }
 }
 
-export type ExitReason = 'tp' | 'sl' | 'time' | 'cross'
+export type ExitReason = 'tp' | 'sl' | 'time' | 'cross' | 'open' // open = sigue comprado al final
 
 export type Trade = {
   entryTime: number // ms
@@ -122,7 +135,7 @@ export function lines(bars: Bar[]): Lines {
 
 export function runStrategy(bars: Bar[], strategy: Strategy, p: Params, interval: BtInterval): Result {
   if (strategy === 'dca') return runDca(bars, p, interval)
-  const trades = strategy === 'trend' ? tradeTrend(bars, p) : tradeBounce(bars, p)
+  const trades = strategy === 'trend' ? tradeTrend(bars, p) : strategy === 'dip' ? tradeDip(bars, p) : tradeBounce(bars, p)
   return { strategy, trades, stats: tradeStats(bars, trades), equity: tradeEquity(bars, trades) }
 }
 
@@ -192,6 +205,37 @@ export function tradeTrend(bars: Bar[], p: Params, from = START, to = bars.lengt
       else if (j > entryIdx && !above(bars, j - 1)) exit = { idx: j, price: b.open, reason: 'cross' }
     }
     if (!exit) break
+    trades.push(makeTrade(bars, entryIdx, entry, exit.idx, exit.price, exit.reason, p.stake))
+    i = exit.idx
+  }
+  return trades
+}
+
+// ===== Tu estrategia: comprar en la caída =====
+
+export function tradeDip(bars: Bar[], p: Params): Trade[] {
+  const trades: Trade[] = []
+  for (let i = START; i < bars.length - 1; i++) {
+    const prev = bars[i]
+    if (prev.close >= prev.open) continue // solo después de una vela que cerró bajando
+    // Compra límite p.dip% abajo del cierre, válida durante la vela siguiente
+    const limit = prev.close * (1 - p.dip / 100)
+    const entryIdx = i + 1
+    const e = bars[entryIdx]
+    if (e.low > limit) continue // no bajó tanto: la orden no se ejecutó
+    const entry = Math.min(limit, e.open) // si abrió más abajo, se compra al abrir
+    const tpPrice = entry * (1 + p.tp / 100)
+    const slPrice = p.sl > 0 ? entry * (1 - p.sl / 100) : 0
+    let exit: { idx: number; price: number; reason: ExitReason } | null = null
+    // En la vela de compra no sabemos qué pasó primero: solo contamos el stop (somos pesimistas)
+    if (slPrice && e.low <= slPrice) exit = { idx: entryIdx, price: slPrice, reason: 'sl' }
+    for (let j = entryIdx + 1; j < bars.length && !exit; j++) {
+      const b = bars[j]
+      if (slPrice && b.low <= slPrice) exit = { idx: j, price: Math.min(slPrice, b.open), reason: 'sl' }
+      else if (b.high >= tpPrice) exit = { idx: j, price: Math.max(tpPrice, b.open), reason: 'tp' }
+    }
+    // Si nunca vendió, lo contamos con el último precio: es lo que valdría hoy
+    if (!exit) exit = { idx: bars.length - 1, price: bars[bars.length - 1].close, reason: 'open' }
     trades.push(makeTrade(bars, entryIdx, entry, exit.idx, exit.price, exit.reason, p.stake))
     i = exit.idx
   }

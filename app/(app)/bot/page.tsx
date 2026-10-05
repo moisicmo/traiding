@@ -27,13 +27,13 @@ const median = (list: number[]) => {
   return sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2
 }
 
-const REASON: Record<Trade['reason'], string> = { tp: 'Llegó a la ganancia', sl: 'Stop loss', time: 'Tiempo', cross: 'Terminó la subida' }
+const REASON: Record<Trade['reason'], string> = { tp: 'Llegó a la ganancia', sl: 'Stop loss', time: 'Tiempo', cross: 'Terminó la subida', open: 'Sigue comprado (precio de hoy)' }
 
-type Search = { s?: string; i?: string; st?: string; tp?: string; sl?: string; max?: string }
+type Search = { s?: string; i?: string; st?: string; tp?: string; sl?: string; max?: string; dip?: string }
 
 function readParams(q: Search) {
   const interval: BtInterval = q.i === '1d' ? '1d' : '4h'
-  const strategy: Strategy = q.st === 'trend' || q.st === 'dca' ? q.st : 'bounce'
+  const strategy: Strategy = q.st === 'trend' || q.st === 'dca' || q.st === 'dip' ? q.st : 'bounce'
   const def = defaultParams(strategy, interval)
   const num = (v: string | undefined, d: number, min: number, max: number) => {
     const n = Number(String(v ?? '').replace(',', '.'))
@@ -41,8 +41,10 @@ function readParams(q: Search) {
   }
   const params: Params = {
     tp: num(q.tp, def.tp, 0.3, 50),
-    sl: num(q.sl, def.sl, 0.3, 50),
+    // En tu estrategia el stop loss puede ser 0 (sin stop)
+    sl: num(q.sl, def.sl, strategy === 'dip' ? 0 : 0.3, 50),
     maxBars: Math.round(num(q.max, def.maxBars, 1, 500)),
+    dip: num(q.dip, def.dip, 0.1, 30),
     stake: 100,
   }
   const symbol = q.s === 'ALL' ? 'ALL' : q.s && isUsdtSymbol(q.s) ? q.s : 'BNBUSDT'
@@ -144,7 +146,7 @@ async function OneCoin({
   if (bars.length < 120) return <p className="mt-6 rounded-xl bg-panel p-4 text-muted">Esta moneda tiene muy poco historial para probar.</p>
 
   const result = runStrategy(bars, strategy, params, interval)
-  // Las 3 con su configuración recomendada, para compararlas en igualdad de condiciones
+  // Las 4 con su configuración recomendada, para compararlas en igualdad de condiciones
   const compare = ALL_STRATEGIES.map((s) => runStrategy(bars, s, defaultParams(s, interval), interval))
   const s = result.stats
   const v = verdict(result)
@@ -251,7 +253,7 @@ function Comparison({
   const best = rows[0]
 
   return (
-    <Card title={`¿Qué estrategia funcionó mejor en ${name}?`} subtitle="Las 3 con su configuración recomendada · toca una para ver su detalle" className="mt-4">
+    <Card title={`¿Qué estrategia funcionó mejor en ${name}?`} subtitle="Las 4 con su configuración recomendada · toca una para ver su detalle" className="mt-4">
       <ul className="space-y-2">
         {rows.map((r) => {
           const w = (Math.abs(r.total) / max) * 50
@@ -324,7 +326,7 @@ async function AllCoins({
     <>
       {/* Resumen: en cuántas monedas fue la mejor, y el resultado típico (la mediana). No sumamos: una sola moneda
           que se disparó (como Zcash, que subió ~37 veces) arrastraría la suma y daría una idea equivocada. */}
-      <section className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <section className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
         {[...ALL_STRATEGIES, 'hold' as const].map((s) => {
           const value = (r: (typeof rows)[number]) => (s === 'hold' ? r.hold : r.results[s].stats.total)
           const bestIn = rows.filter((r) => r.best === s).length

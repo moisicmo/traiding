@@ -255,9 +255,9 @@ function Comparison({
           const w = (Math.abs(r.total) / max) * 50
           const body = (
             <>
-              <span className="w-full shrink-0 text-sm sm:w-56">
+              <span className="w-full shrink-0 text-sm sm:w-72">
                 {r.label}
-                {r === best && <span className="ml-1.5 rounded bg-sma20/15 px-1.5 py-0.5 text-xs text-sma20">★ la mejor</span>}
+                {r === best && <span className="ml-1.5 whitespace-nowrap rounded bg-sma20/15 px-1.5 py-0.5 text-xs text-sma20">★ la mejor</span>}
               </span>
               {/* Barra con el cero al medio: verde a la derecha si ganó, roja a la izquierda si perdió */}
               <span className="relative h-5 flex-1">

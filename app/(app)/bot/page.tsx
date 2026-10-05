@@ -9,6 +9,7 @@ import { BacktestChart } from '@/components/backtest-chart'
 import { PnlChart } from '@/components/pnl-chart'
 import { CoinIcon } from '@/components/coin-icon'
 import { BotForm } from '@/components/bot-form'
+import { BotTabs } from '@/components/bot-tabs'
 
 export const metadata = { title: 'Bot · Trading' }
 
@@ -67,6 +68,7 @@ export default async function BotPage({ searchParams }: { searchParams: Promise<
   return (
     <main className="safe-top mx-auto w-full max-w-screen-2xl px-4 py-6 md:px-6">
       <PageHeader title="Bot · Probar estrategias" subtitle="Etapa 1: backtest. ¿Cuánto habría ganado cada estrategia en el pasado?" />
+      <BotTabs current="test" />
 
       <details className="group mt-4 rounded-2xl border border-border bg-panel">
         <summary className="cursor-pointer list-none p-4 text-sm font-medium marker:hidden">

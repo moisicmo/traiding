@@ -5,7 +5,7 @@ import { CandlestickSeries, ColorType, createChart, createSeriesMarkers, LineSer
 import type { Bar } from '@/lib/binance'
 import type { Trade } from '@/lib/backtest'
 import { sma } from '@/lib/indicators'
-import { COLORS } from './price-chart'
+import { COLORS } from '@/lib/colors'
 
 const PANEL = '#171b23'
 

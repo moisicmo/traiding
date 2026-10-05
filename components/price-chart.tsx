@@ -16,18 +16,10 @@ import {
 } from 'lightweight-charts'
 import { getKlines, signed, toBar, WS, type Bar, type Interval, type Symbol } from '@/lib/binance'
 import { sma } from '@/lib/indicators'
+import { COLORS } from '@/lib/colors'
 import { AHEAD, FLAT, type Analysis, type Direction } from '@/lib/analysis'
 
-export const COLORS = {
-  bg: '#0f1218',
-  grid: '#1c212b',
-  muted: '#8a93a6',
-  text: '#e6e8ec',
-  up: '#26a69a',
-  down: '#ef5350',
-  sma20: '#f5c542',
-  sma50: '#4c8dff',
-}
+export { COLORS }
 const ODDS_MIN_W = 96 // ancho mínimo de la columna de probabilidades (px), para que se lea en el celular
 const BOX_COLOR: Record<Direction, string> = { up: COLORS.up, down: COLORS.down, flat: COLORS.muted }
 

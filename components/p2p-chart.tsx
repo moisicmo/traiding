@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react'
 import { CandlestickSeries, ColorType, createChart, LineSeries } from 'lightweight-charts'
 import type { Bar } from '@/lib/binance'
 import { sma } from '@/lib/indicators'
-import { COLORS } from './price-chart'
+import { COLORS } from '@/lib/colors'
 
 const PRICE = { type: 'price' as const, precision: 3, minMove: 0.001 }
 

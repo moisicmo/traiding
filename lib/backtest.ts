@@ -4,7 +4,6 @@
 // eso sería trampa), cobra 0,1% de comisión por lado y, si en una vela se tocan la ganancia y
 // la pérdida, cuenta la pérdida (somos pesimistas a propósito).
 import type { Bar } from './binance'
-import { smaAt } from './indicators'
 
 export const FEE = 0.001 // 0,1% por operación, como Binance
 
@@ -93,8 +92,33 @@ export type Result = {
   equity: { time: number; value: number }[] // ganancia acumulada a lo largo del tiempo
 }
 
-const START = 60 // las primeras 60 velas solo sirven para calcular las líneas
+export const START = 60 // las primeras 60 velas solo sirven para calcular las líneas
 const net = (entry: number, exit: number) => (exit / entry) * (1 - FEE) * (1 - FEE) - 1
+
+/**
+ * La línea amarilla (promedio de 20 velas) y la azul (50) de cada vela, calculadas UNA vez por historial.
+ * El bot que aprende hace miles de mini-pruebas sobre el mismo historial: recalcularlas cada vez sería lentísimo.
+ */
+type Lines = { s20: Float64Array; s50: Float64Array }
+const linesCache = new WeakMap<Bar[], Lines>()
+export function lines(bars: Bar[]): Lines {
+  let l = linesCache.get(bars)
+  if (!l) {
+    const avg = (period: number) => {
+      const out = new Float64Array(bars.length).fill(NaN)
+      let sum = 0
+      for (let i = 0; i < bars.length; i++) {
+        sum += bars[i].close
+        if (i >= period) sum -= bars[i - period].close
+        if (i >= period - 1) out[i] = sum / period
+      }
+      return out
+    }
+    l = { s20: avg(20), s50: avg(50) }
+    linesCache.set(bars, l)
+  }
+  return l
+}
 
 export function runStrategy(bars: Bar[], strategy: Strategy, p: Params, interval: BtInterval): Result {
   if (strategy === 'dca') return runDca(bars, p, interval)
@@ -107,25 +131,27 @@ export function runStrategy(bars: Bar[], strategy: Strategy, p: Params, interval
 /** ¿En esta vela se cumple la regla de compra del rebote? Solo usa velas hasta i (inclusive). */
 export function bounceSignal(bars: Bar[], i: number): boolean {
   if (i < START) return false
-  const s20 = smaAt(bars, i, 20)!
-  const s50 = smaAt(bars, i, 50)!
-  const rising = s20 > s50 && s50 > smaAt(bars, i - 10, 50)!
+  const { s20: a20, s50: a50 } = lines(bars)
+  const s20 = a20[i]
+  const s50 = a50[i]
+  const rising = s20 > s50 && s50 > a50[i - 10]
   const b = bars[i]
   // "Tocar" = bajó hasta la amarilla pero cerró cerca o encima de ella (igual que en el análisis)
   const touch = b.low <= s20 * 1.005 && b.close >= s20 * 0.99
   return rising && touch
 }
 
-function tradeBounce(bars: Bar[], p: Params): Trade[] {
+/** Operaciones del rebote. Con from/to se prueba solo un tramo: entra y sale dentro de [from, to). */
+export function tradeBounce(bars: Bar[], p: Params, from = START, to = bars.length): Trade[] {
   const trades: Trade[] = []
-  for (let i = START; i < bars.length - 1; i++) {
+  for (let i = Math.max(from, START); i < to - 1; i++) {
     if (!bounceSignal(bars, i)) continue
     const entryIdx = i + 1
     const entry = bars[entryIdx].open
     const tpPrice = entry * (1 + p.tp / 100)
     const slPrice = entry * (1 - p.sl / 100)
     let exit: { idx: number; price: number; reason: ExitReason } | null = null
-    for (let j = entryIdx; j < bars.length && !exit; j++) {
+    for (let j = entryIdx; j < to && !exit; j++) {
       const b = bars[j]
       // Si abrió por debajo del stop (un "salto"), se vende a ese precio, no al stop
       if (b.low <= slPrice) exit = { idx: j, price: Math.min(slPrice, b.open), reason: 'sl' }
@@ -141,18 +167,25 @@ function tradeBounce(bars: Bar[], p: Params): Trade[] {
 
 // ===== Seguir la tendencia =====
 
-const above = (bars: Bar[], i: number) => smaAt(bars, i, 20)! > smaAt(bars, i, 50)!
+/** ¿La amarilla está encima de la azul en esta vela? */
+export const above = (bars: Bar[], i: number) => {
+  const { s20, s50 } = lines(bars)
+  return s20[i] > s50[i]
+}
 
-function tradeTrend(bars: Bar[], p: Params): Trade[] {
+/** ¿En esta vela la amarilla cruzó hacia arriba a la azul? (señal de compra de la tendencia) */
+export const trendSignal = (bars: Bar[], i: number) => i >= START && above(bars, i) && !above(bars, i - 1)
+
+export function tradeTrend(bars: Bar[], p: Params, from = START, to = bars.length): Trade[] {
   const trades: Trade[] = []
-  for (let i = START; i < bars.length - 1; i++) {
+  for (let i = Math.max(from, START); i < to - 1; i++) {
     // Señal: en esta vela la amarilla pasó a estar encima de la azul (cruce hacia arriba)
-    if (!(above(bars, i) && !above(bars, i - 1))) continue
+    if (!trendSignal(bars, i)) continue
     const entryIdx = i + 1
     const entry = bars[entryIdx].open
     const slPrice = entry * (1 - p.sl / 100)
     let exit: { idx: number; price: number; reason: ExitReason } | null = null
-    for (let j = entryIdx; j < bars.length && !exit; j++) {
+    for (let j = entryIdx; j < to && !exit; j++) {
       const b = bars[j]
       if (b.low <= slPrice) exit = { idx: j, price: Math.min(slPrice, b.open), reason: 'sl' }
       // Si la vela anterior cerró con la amarilla debajo de la azul, vende al abrir esta

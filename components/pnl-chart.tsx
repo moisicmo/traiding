@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { ColorType, createChart, LineSeries, LineType, type UTCTimestamp } from 'lightweight-charts'
-import { COLORS } from './price-chart'
+import { COLORS } from '@/lib/colors'
 
 // El gráfico muestra la hora en UTC: corremos −4 h para ver fechas de Bolivia
 const LA_PAZ_OFFSET = -4 * 3600

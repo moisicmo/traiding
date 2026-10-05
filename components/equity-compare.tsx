@@ -21,7 +21,8 @@ export function EquityCompare({ curves }: { curves: Curve[] }) {
       timeScale: { borderVisible: false },
       rightPriceScale: { borderVisible: false },
       handleScroll: { vertTouchDrag: false },
-      localization: { priceFormatter: (p: number) => p.toFixed(0) },
+      // Con 2 decimales: al principio la cartera se mueve de a centavos y sin decimales todo decía "200"
+      localization: { priceFormatter: (p: number) => p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
     })
     for (const c of curves) {
       const seen = new Set<number>()

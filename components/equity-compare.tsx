@@ -18,7 +18,7 @@ export function EquityCompare({ curves }: { curves: Curve[] }) {
       autoSize: true,
       layout: { background: { type: ColorType.Solid, color: PANEL }, textColor: COLORS.muted, attributionLogo: false },
       grid: { vertLines: { visible: false }, horzLines: { color: COLORS.grid } },
-      timeScale: { borderVisible: false },
+      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false }, // con hora: el bot en vivo tiene una foto por hora
       rightPriceScale: { borderVisible: false },
       handleScroll: { vertTouchDrag: false },
       // Con 2 decimales: al principio la cartera se mueve de a centavos y sin decimales todo decía "200"

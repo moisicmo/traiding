@@ -35,6 +35,7 @@ import { CoinIcon } from '@/components/coin-icon'
 import { EquityCompare } from '@/components/equity-compare'
 import { pause, panic, resume, start } from './actions'
 import { JobProgress } from '@/components/job-progress'
+import { metrics } from '@/lib/podium'
 import { SubmitButton } from '@/components/submit-button'
 
 export const metadata = { title: 'Bot en vivo · Trading' }
@@ -64,7 +65,8 @@ const COLOR: Record<Competitor | 'hold', string> = {
 }
 const NAME = (k: Competitor | 'hold') => (k === 'hold' ? `${HOLD.emoji} ${HOLD.label}` : `${COMPETITORS[k].emoji} ${COMPETITORS[k].label}`)
 
-export default async function VivoPage() {
+export default async function VivoPage({ searchParams }: { searchParams: Promise<{ top?: string }> }) {
+  const top = (await searchParams).top === '5' ? 5 : 3
   const job = getJob()
   // Mientras se prepara la competencia, solo la barra de progreso (el resto se está borrando y rearmando)
   if (job?.status === 'running')
@@ -249,6 +251,8 @@ export default async function VivoPage() {
         )}
       </Card>
 
+      {equity.length >= 2 && <Podium equity={equity} capital={capital} counts={counts} top={top} />}
+
       {equity.length >= 2 && (
         <Card
           title="La carrera"
@@ -375,6 +379,94 @@ function FromDate() {
       <input type="date" name="from" defaultValue={day(-91)} min={day(-365)} max={day(0)} className="input mt-1" />
       <span className="mt-1 block text-xs">Simula desde esa fecha y sigue en vivo. Hoy = solo en vivo. Máximo 1 año.</span>
     </label>
+  )
+}
+
+/** 🏆 Podio: los N mejores, solos en un gráfico, con las métricas para elegir */
+function Podium({
+  equity,
+  capital,
+  counts,
+  top,
+}: {
+  equity: { ts: number; strategy: string; value: number }[]
+  capital: number
+  counts: Map<string, { closed: number; wins: number }>
+  top: number
+}) {
+  const keys = [...COMPETITOR_KEYS, 'hold' as const]
+  const rows = keys
+    .map((k) => {
+      const points = equity.filter((e) => e.strategy === k).map((e) => ({ ts: e.ts, value: e.value }))
+      return { k, points, m: metrics(points, capital), c: k === 'hold' ? null : counts.get(k) }
+    })
+    .sort((a, b) => b.m.gain - a.m.gain)
+  const best = rows.filter((r) => r.k !== 'hold').slice(0, top)
+  const hold = rows.find((r) => r.k === 'hold')!
+  const safest = [...best].sort((a, b) => b.m.ratio - a.m.ratio)[0]
+
+  return (
+    <Card title={`🏆 Podio: los ${top} mejores`} subtitle="Solo los que más ganaron, comparados con no tocar. Para elegir, mira también cuánto llegaron a caer." className="mt-4">
+      <div className="mb-3 flex gap-2 text-sm">
+        {[3, 5].map((n) => (
+          <a
+            key={n}
+            href={`?top=${n}`}
+            className={clsx('rounded-full border px-3 py-1', n === top ? 'border-text bg-text text-bg' : 'border-border text-muted hover:text-text')}
+          >
+            Top {n}
+          </a>
+        ))}
+      </div>
+
+      <EquityCompare
+        curves={[
+          ...best.map((r) => ({ label: NAME(r.k), color: COLOR[r.k], points: r.points.map((p) => ({ time: p.ts, value: p.value })) })),
+          { label: NAME('hold'), color: COLOR.hold, points: hold.points.map((p) => ({ time: p.ts, value: p.value })), dashed: true },
+        ]}
+      />
+
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-150 text-sm">
+          <thead className="text-left text-muted">
+            <tr className="border-b border-border">
+              <th className="py-2 font-normal">Competidor</th>
+              <th className="py-2 text-right font-normal">Ganancia</th>
+              <th className="py-2 text-right font-normal">Por mes</th>
+              <th className="py-2 text-right font-normal" title="Lo máximo que llegó a caer desde su mejor momento">
+                Peor caída
+              </th>
+              <th className="py-2 text-right font-normal" title="Ganancia dividida por la peor caída: cuánto ganó por cada % que llegó a caer">
+                Ganancia / caída
+              </th>
+              <th className="py-2 text-right font-normal">Operaciones</th>
+              <th className="py-2 text-right font-normal">Aciertos</th>
+            </tr>
+          </thead>
+          <tbody className="tabular">
+            {[...best, hold].map((r) => (
+              <tr key={r.k} className={clsx('border-b border-border last:border-0', r.k === 'hold' && 'text-muted')}>
+                <td className="py-2">
+                  <span className="mr-2 inline-block size-2.5 rounded-full" style={{ background: COLOR[r.k] }} />
+                  {NAME(r.k)}
+                  {r === safest && <span className="ml-2 rounded bg-up/15 px-1.5 py-0.5 text-xs text-up">más estable</span>}
+                </td>
+                <td className={clsx('py-2 text-right font-semibold', tone(r.m.gain))}>{pctText(r.m.gain)}</td>
+                <td className={clsx('py-2 text-right', tone(r.m.monthly))}>{pctText(r.m.monthly)}</td>
+                <td className="py-2 text-right text-down">{pctText(r.m.maxDrawdown)}</td>
+                <td className="py-2 text-right">{Number.isFinite(r.m.ratio) ? r.m.ratio.toFixed(2) : '—'}</td>
+                <td className="py-2 text-right">{r.c ? r.c.closed : '—'}</td>
+                <td className="py-2 text-right">{r.c && r.c.closed ? `${Math.round((r.c.wins / r.c.closed) * 100)}%` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 text-xs text-muted">
+        <b>Cómo elegir:</b> el que más gana no siempre es el mejor para ti. Si uno llegó a caer −40% en el camino, con plata real es muy difícil
+        aguantarlo sin vender. &quot;Ganancia / caída&quot; mide cuánto ganó por cada % que llegó a caer: más alto = más ganancia con menos sustos.
+      </p>
+    </Card>
   )
 }
 

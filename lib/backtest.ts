@@ -4,11 +4,11 @@
 // eso sería trampa), cobra 0,1% de comisión por lado y, si en una vela se tocan la ganancia y
 // la pérdida, cuenta la pérdida (somos pesimistas a propósito).
 import type { Bar } from './binance'
-import { bollSignal, exitBy, fibSignal, goldenSignal, pocSignal, rsiSignal, smcSignal, turtleSignal, type EntryPlan } from './signals'
+import { bollSignal, exitBy, fibSignal, goldenSignal, pocSignal, rsiSignal, smcSignal, trendPlusSignal, turtleSignal, type EntryPlan } from './signals'
 
 export const FEE = 0.001 // 0,1% por operación, como Binance
 
-export type Strategy = 'bounce' | 'trend' | 'dca' | 'dip' | 'poc' | 'fib' | 'smc' | 'rsi' | 'boll' | 'turtle' | 'golden' | 'rebal'
+export type Strategy = 'bounce' | 'trend' | 'trendplus' | 'dca' | 'dip' | 'poc' | 'fib' | 'smc' | 'rsi' | 'boll' | 'turtle' | 'golden' | 'rebal'
 export type BtInterval = '4h' | '1d'
 
 export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short: string; how: string[] }> = {
@@ -30,6 +30,16 @@ export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short:
       'Compra cuando la amarilla cruza hacia ARRIBA a la azul: empieza una subida.',
       'Vende cuando la amarilla cruza hacia ABAJO a la azul (se acabó la subida), o en el stop loss si cae de golpe.',
       'Acierta pocas veces, pero cuando acierta se queda en subidas grandes. Hay que aguantar varias pérdidas chicas seguidas.',
+    ],
+  },
+  trendplus: {
+    emoji: '🛡️',
+    label: 'Tendencia+ (media 200)',
+    short: 'Tendencia+',
+    how: [
+      'Una versión más paciente de "seguir la tendencia".',
+      'Compra cuando el precio sube más de 5% arriba de su media de 200 velas (≈33 días).',
+      'Se queda dentro mientras siga arriba, y vende cuando cae más de 5% debajo de esa media. Así sale de las caídas grandes sin salir por cualquier bajadita.',
     ],
   },
   dip: {
@@ -260,7 +270,8 @@ export function tradeBounce(bars: Bar[], p: Params, from = START, to = bars.leng
       else if (b.high >= tpPrice) exit = { idx: j, price: Math.max(tpPrice, b.open), reason: 'tp' }
       else if (j - entryIdx + 1 >= p.maxBars) exit = { idx: j, price: b.close, reason: 'time' }
     }
-    if (!exit) break // la última operación todavía estaría abierta: no la contamos
+    // Si quedó abierta al final del tramo, la contamos al último precio del tramo (nunca más allá: sería ver el futuro)
+    if (!exit) exit = { idx: to - 1, price: bars[to - 1].close, reason: 'open' }
     trades.push(makeTrade(bars, entryIdx, entry, exit.idx, exit.price, exit.reason, p.stake))
     i = exit.idx // una operación a la vez
   }
@@ -293,7 +304,7 @@ export function tradeTrend(bars: Bar[], p: Params, from = START, to = bars.lengt
       // Si la vela anterior cerró con la amarilla debajo de la azul, vende al abrir esta
       else if (j > entryIdx && !above(bars, j - 1)) exit = { idx: j, price: b.open, reason: 'cross' }
     }
-    if (!exit) break
+    if (!exit) exit = { idx: to - 1, price: bars[to - 1].close, reason: 'open' } // abierta al final del tramo: su último precio
     trades.push(makeTrade(bars, entryIdx, entry, exit.idx, exit.price, exit.reason, p.stake))
     i = exit.idx
   }
@@ -302,7 +313,7 @@ export function tradeTrend(bars: Bar[], p: Params, from = START, to = bars.lengt
 
 // ===== POC, Fibonacci y Smart Money: cada señal trae su propio plan (stop, objetivo, tiempo) =====
 
-export const PLANNED = { poc: pocSignal, fib: fibSignal, smc: smcSignal, rsi: rsiSignal, boll: bollSignal, turtle: turtleSignal, golden: goldenSignal } as const
+export const PLANNED = { poc: pocSignal, fib: fibSignal, smc: smcSignal, rsi: rsiSignal, boll: bollSignal, turtle: turtleSignal, golden: goldenSignal, trendplus: trendPlusSignal } as const
 export type PlannedStrategy = keyof typeof PLANNED
 
 /** Convierte el plan en precios concretos con la compra real. null si el plan no tiene sentido (stop arriba de la compra, etc.) */
@@ -330,7 +341,8 @@ export function tradePlanned(bars: Bar[], signal: (bars: Bar[], i: number) => En
       else if (plan.exitRule && j > entryIdx && exitBy(plan.exitRule, bars, j)) exit = { idx: j, price: b.close, reason: 'rule' }
       else if (plan.maxBars && j - entryIdx + 1 >= plan.maxBars) exit = { idx: j, price: b.close, reason: 'time' }
     }
-    if (!exit) break // la última operación todavía estaría abierta: no la contamos
+    // Si quedó abierta al final, la contamos al precio de hoy (como "no tocar", que cuenta todo hasta hoy)
+    if (!exit) exit = { idx: bars.length - 1, price: bars[bars.length - 1].close, reason: 'open' }
     trades.push(makeTrade(bars, entryIdx, entry, exit.idx, exit.price, exit.reason, stake))
     i = exit.idx
   }

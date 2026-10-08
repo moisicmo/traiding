@@ -218,12 +218,23 @@ export function goldenSignal(bars: Bar[], i: number): EntryPlan | null {
   return { slPct: 10, exitRule: 'death', note: 'La media de 50 cruzó hacia arriba a la de 200 (golden cross)' }
 }
 
-export type ExitRule = 'rsi70' | 'bollMid' | 'turtle10' | 'death'
+// ===== 🛡️ Tendencia+ (filtro de la media de 200) =====
+// Se queda DENTRO mientras el precio esté arriba de su media de 200 velas (≈33 días) y sale cuando cae claramente debajo.
+// El margen de 5% evita entrar y salir por ruido. Sin stop loss fijo: la salida es la media.
+export function trendPlusSignal(bars: Bar[], i: number): EntryPlan | null {
+  if (i < 201) return null
+  const m = smaArr(bars, 200)
+  if (!(bars[i].close > m[i] * 1.05)) return null // basta con estar arriba: "dentro mientras esté arriba"
+  return { exitRule: 'below200', note: `El precio superó su media de 200 velas por más de 5% (${px(m[i])}): tendencia de fondo alcista` }
+}
+
+export type ExitRule = 'rsi70' | 'bollMid' | 'turtle10' | 'death' | 'below200'
 
 /** ¿La vela cerrada i dice "vender"? (según la regla de salida de cada técnica) */
 export function exitBy(rule: ExitRule, bars: Bar[], i: number): boolean {
   if (rule === 'rsi70') return rsiArr(bars)[i] > 70
   if (rule === 'bollMid') return bars[i].close >= smaArr(bars, 20)[i]
   if (rule === 'turtle10') return i >= 10 && bars[i].close < lowest(bars, i - 10, i)
+  if (rule === 'below200') return bars[i].close < smaArr(bars, 200)[i] * 0.95
   return smaArr(bars, 50)[i] < smaArr(bars, 200)[i] // death cross
 }

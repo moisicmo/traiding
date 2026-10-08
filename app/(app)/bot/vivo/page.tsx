@@ -20,6 +20,7 @@ import {
   listPositions,
   listTrades,
   portfolioValue,
+  learnState,
   REASONS,
   tradeCounts,
   SLOTS,
@@ -42,6 +43,8 @@ const coin = (symbol: string) => symbol.replace('USDT', '')
 
 // Un color por competidor (líneas del gráfico y marquitas); "no tocar" en gris
 const COLOR: Record<Competitor | 'hold', string> = {
+  learn: '#ffffff',
+  trendplus: '#7c83ff',
   trend: COLORS.sma50,
   poc: '#b98bff',
   fib: '#ff9f43',
@@ -99,6 +102,7 @@ export default async function VivoPage() {
   const positions = listPositions().filter((p) => p.strategy !== 'rebal') // el rebalanceo tiene un poco de todas: se resume en la tabla
   const trades = listTrades()
   const counts = tradeCounts()
+  const learn = learnState()
   const equity = listEquity()
   const days = daysRunning(started)
   const liveSince = getLiveSince()
@@ -172,6 +176,35 @@ export default async function VivoPage() {
         </ol>
       </Card>
 
+      <Card title="🧠 A quién copia el que aprende" subtitle="Cada día mira los últimos 14 días y copia las compras de los 3 mejores que vienen ganando" className="mt-4">
+        <p className="text-sm">
+          Ahora copia a:{' '}
+          {learn.follow.length ? (
+            learn.follow.map((k, i) => (
+              <span key={k}>
+                {i > 0 && ' · '}
+                <Badge k={k} />
+              </span>
+            ))
+          ) : (
+            <span className="text-muted">nadie (ningún competidor gana en los últimos 14 días, así que espera en USDT)</span>
+          )}
+        </p>
+        {learn.log.length > 0 && (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm text-muted">Sus cambios de opinión ({learn.log.length})</summary>
+            <ul className="mt-2 space-y-1 text-xs">
+              {learn.log.map((l) => (
+                <li key={l.ts} className="flex flex-wrap items-center gap-1">
+                  <span className="w-28 text-muted">{when(l.ts)}</span>
+                  {l.follow.length ? l.follow.map((k) => <Badge key={k} k={k} />) : <span className="text-muted">a nadie</span>}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </Card>
+
       {equity.length >= 2 && (
         <Card
           title="La carrera"
@@ -214,7 +247,8 @@ export default async function VivoPage() {
                       {coin(p.symbol)}/USDT <Badge k={p.strategy} />
                     </p>
                     <p className="tabular text-xs text-muted">
-                      compró a {fmt(p.entry)} · hoy {fmt(price)} · stop {fmt(p.sl)}
+                      compró a {fmt(p.entry)} · hoy {fmt(price)}
+                      {p.sl > 0 ? ` · stop ${fmt(p.sl)}` : ''}
                       {p.tp ? ` · objetivo ${fmt(p.tp)}` : ''}
                     </p>
                     {p.note && <p className="truncate text-xs text-muted">{p.note}</p>}

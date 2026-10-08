@@ -33,7 +33,7 @@ type Search = { s?: string; i?: string; st?: string; tp?: string; sl?: string; m
 
 function readParams(q: Search) {
   const interval: BtInterval = q.i === '1d' ? '1d' : '4h'
-  const strategy: Strategy = q.st === 'trend' || q.st === 'dca' || q.st === 'dip' ? q.st : 'bounce'
+  const strategy: Strategy = q.st && q.st in STRATEGIES ? (q.st as Strategy) : 'bounce'
   const def = defaultParams(strategy, interval)
   const num = (v: string | undefined, d: number, min: number, max: number) => {
     const n = Number(String(v ?? '').replace(',', '.'))
@@ -146,7 +146,7 @@ async function OneCoin({
   if (bars.length < 120) return <p className="mt-6 rounded-xl bg-panel p-4 text-muted">Esta moneda tiene muy poco historial para probar.</p>
 
   const result = runStrategy(bars, strategy, params, interval)
-  // Las 4 con su configuración recomendada, para compararlas en igualdad de condiciones
+  // Todas con su configuración recomendada, para compararlas en igualdad de condiciones
   const compare = ALL_STRATEGIES.map((s) => runStrategy(bars, s, defaultParams(s, interval), interval))
   const s = result.stats
   const v = verdict(result)
@@ -253,7 +253,7 @@ function Comparison({
   const best = rows[0]
 
   return (
-    <Card title={`¿Qué estrategia funcionó mejor en ${name}?`} subtitle="Las 4 con su configuración recomendada · toca una para ver su detalle" className="mt-4">
+    <Card title={`¿Qué estrategia funcionó mejor en ${name}?`} subtitle="Todas con su configuración recomendada · toca una para ver su detalle" className="mt-4">
       <ul className="space-y-2">
         {rows.map((r) => {
           const w = (Math.abs(r.total) / max) * 50
@@ -326,7 +326,7 @@ async function AllCoins({
     <>
       {/* Resumen: en cuántas monedas fue la mejor, y el resultado típico (la mediana). No sumamos: una sola moneda
           que se disparó (como Zcash, que subió ~37 veces) arrastraría la suma y daría una idea equivocada. */}
-      <section className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <section className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         {[...ALL_STRATEGIES, 'hold' as const].map((s) => {
           const value = (r: (typeof rows)[number]) => (s === 'hold' ? r.hold : r.results[s].stats.total)
           const bestIn = rows.filter((r) => r.best === s).length

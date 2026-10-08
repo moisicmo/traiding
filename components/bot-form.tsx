@@ -20,7 +20,7 @@ export function BotForm({ coins, symbol, interval, strategy: initial, params }: 
 
   return (
     <form method="get" action="/bot" className="mt-3 rounded-2xl border border-border bg-panel p-4">
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         {(Object.keys(STRATEGIES) as Strategy[]).map((s) => (
           <label
             key={s}

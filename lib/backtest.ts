@@ -4,10 +4,11 @@
 // eso sería trampa), cobra 0,1% de comisión por lado y, si en una vela se tocan la ganancia y
 // la pérdida, cuenta la pérdida (somos pesimistas a propósito).
 import type { Bar } from './binance'
+import { fibSignal, pocSignal, smcSignal, type EntryPlan } from './signals'
 
 export const FEE = 0.001 // 0,1% por operación, como Binance
 
-export type Strategy = 'bounce' | 'trend' | 'dca' | 'dip'
+export type Strategy = 'bounce' | 'trend' | 'dca' | 'dip' | 'poc' | 'fib' | 'smc'
 export type BtInterval = '4h' | '1d'
 
 export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short: string; how: string[] }> = {
@@ -39,6 +40,36 @@ export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short:
       'Después de una vela que cerró bajando, pone una compra límite un poco más abajo (como tu compra de BNB a 765,27 cuando estaba en ~774).',
       'Cuando se compra, pone la venta límite un poco más arriba. Stop loss opcional: con 0 no hay stop, como haces hoy.',
       'Si al final quedó algo comprado sin vender, se cuenta con el precio de hoy (así no se esconden las pérdidas de lo que nunca rebotó).',
+    ],
+  },
+  poc: {
+    emoji: '📊',
+    label: 'POC (perfil de volumen)',
+    short: 'POC',
+    how: [
+      'Calcula el POC: el precio donde más se compró y vendió en los últimos ~20 días.',
+      'Compra si el precio venía arriba y baja a tocar el POC (la idea: ahí "defienden" ese precio).',
+      'Vende con +6%, con stop loss de −4%, o si pasan ~10 días.',
+    ],
+  },
+  fib: {
+    emoji: '🌀',
+    label: 'Fibonacci',
+    short: 'Fibo',
+    how: [
+      'Busca la última subida de 10% o más.',
+      'Compra si el precio retrocede al 61,8% de esa subida y rebota.',
+      'Vende cuando vuelve al máximo de la subida; stop loss si cae más allá del 78,6%.',
+    ],
+  },
+  smc: {
+    emoji: '🏦',
+    label: 'Smart Money (SMC)',
+    short: 'SMC',
+    how: [
+      'Quiebre de estructura: una vela cierra arriba del máximo de los últimos ~3 días.',
+      'Order block: la última vela roja antes del quiebre. Compra la primera vez que el precio vuelve ahí.',
+      'Stop loss debajo del order block; vende cuando gana el doble de lo que arriesgó (2:1).',
     ],
   },
   dca: {
@@ -135,7 +166,14 @@ export function lines(bars: Bar[]): Lines {
 
 export function runStrategy(bars: Bar[], strategy: Strategy, p: Params, interval: BtInterval): Result {
   if (strategy === 'dca') return runDca(bars, p, interval)
-  const trades = strategy === 'trend' ? tradeTrend(bars, p) : strategy === 'dip' ? tradeDip(bars, p) : tradeBounce(bars, p)
+  const trades =
+    strategy === 'trend'
+      ? tradeTrend(bars, p)
+      : strategy === 'dip'
+        ? tradeDip(bars, p)
+        : strategy in PLANNED
+          ? tradePlanned(bars, PLANNED[strategy as keyof typeof PLANNED], p.stake)
+          : tradeBounce(bars, p)
   return { strategy, trades, stats: tradeStats(bars, trades), equity: tradeEquity(bars, trades) }
 }
 
@@ -206,6 +244,42 @@ export function tradeTrend(bars: Bar[], p: Params, from = START, to = bars.lengt
     }
     if (!exit) break
     trades.push(makeTrade(bars, entryIdx, entry, exit.idx, exit.price, exit.reason, p.stake))
+    i = exit.idx
+  }
+  return trades
+}
+
+// ===== POC, Fibonacci y Smart Money: cada señal trae su propio plan (stop, objetivo, tiempo) =====
+
+export const PLANNED = { poc: pocSignal, fib: fibSignal, smc: smcSignal } as const
+export type PlannedStrategy = keyof typeof PLANNED
+
+/** Convierte el plan en precios concretos con la compra real. null si el plan no tiene sentido (stop arriba de la compra, etc.) */
+export function planPrices(plan: EntryPlan, entry: number): { sl: number; tp: number } | null {
+  const sl = plan.sl ?? (plan.slPct ? entry * (1 - plan.slPct / 100) : 0)
+  const tp = plan.tp ?? (plan.tpPct ? entry * (1 + plan.tpPct / 100) : plan.rr && sl ? entry + (entry - sl) * plan.rr : Infinity)
+  if (sl >= entry || tp <= entry) return null
+  return { sl, tp }
+}
+
+export function tradePlanned(bars: Bar[], signal: (bars: Bar[], i: number) => EntryPlan | null, stake: number): Trade[] {
+  const trades: Trade[] = []
+  for (let i = START; i < bars.length - 1; i++) {
+    const plan = signal(bars, i)
+    if (!plan) continue
+    const entryIdx = i + 1
+    const entry = bars[entryIdx].open
+    const prices = planPrices(plan, entry)
+    if (!prices) continue
+    let exit: { idx: number; price: number; reason: ExitReason } | null = null
+    for (let j = entryIdx; j < bars.length && !exit; j++) {
+      const b = bars[j]
+      if (prices.sl && b.low <= prices.sl) exit = { idx: j, price: Math.min(prices.sl, b.open), reason: 'sl' }
+      else if (b.high >= prices.tp) exit = { idx: j, price: Math.max(prices.tp, b.open), reason: 'tp' }
+      else if (plan.maxBars && j - entryIdx + 1 >= plan.maxBars) exit = { idx: j, price: b.close, reason: 'time' }
+    }
+    if (!exit) break // la última operación todavía estaría abierta: no la contamos
+    trades.push(makeTrade(bars, entryIdx, entry, exit.idx, exit.price, exit.reason, stake))
     i = exit.idx
   }
   return trades

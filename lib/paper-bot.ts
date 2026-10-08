@@ -76,6 +76,8 @@ const rows = <T>(sql: string, ...args: (string | number)[]) => {
 export const isRunning = () => getMeta('arena_enabled') === '1'
 export const getCapital = () => Number(getMeta('arena_capital') ?? 0)
 export const getStartedAt = () => Number(getMeta('arena_started') ?? 0) || null
+/** Desde cuándo corre en vivo (si empezó con simulación, es posterior a getStartedAt) */
+export const getLiveSince = () => Number(getMeta('arena_live_since') ?? 0) || null
 /** ¿Había un bot de la versión anterior (una sola estrategia) prendido? */
 export const hadOldBot = () => !!Number(getMeta('bot_started') ?? 0)
 export const getCash = (s: Competitor) => Number(getMeta(`arena_cash_${s}`) ?? 0)
@@ -101,29 +103,159 @@ export function portfolioValue(s: Competitor, prices: Map<string, number>) {
 
 // ===== Prender, pausar, reiniciar =====
 
-export async function startBot(capital: number) {
+/**
+ * Empieza la competencia. Con monthsBack > 0, primero SIMULA desde esa fecha hasta hoy con las mismas reglas
+ * (vela por vela, sin ver el futuro) y después sigue en vivo con lo que haya quedado comprado.
+ */
+export async function startBot(capital: number, monthsBack = 0) {
   ensureTables()
-  const prices = await getPrices()
   const coins = (await getMarket()).coins
-  const hold: Record<string, number> = {}
-  for (const c of coins) hold[c.symbol] = ((capital / coins.length) * (1 - FEE)) / c.price
-
   db().exec('DELETE FROM arena_positions; DELETE FROM arena_trades; DELETE FROM arena_equity;')
-  for (const s of COMPETITOR_KEYS) setCash(s, capital)
-  setMeta('arena_seen', '{}')
   setMeta('arena_capital', String(capital))
-  setMeta('arena_hold', JSON.stringify(hold))
-  setMeta('arena_started', String(Date.now()))
-  setMeta('arena_enabled', '1')
   setMeta('arena_last_error', '')
+  setMeta('arena_live_since', String(Date.now()))
   setMeta('bot_enabled', '0') // apaga el bot de la versión anterior
-  snapshot(prices, true)
+
+  let summary = ''
+  if (monthsBack > 0) {
+    const from = Date.now() - monthsBack * 30.44 * 86_400_000
+    summary = await replay(coins.map((c) => c.symbol), capital, from)
+    setMeta('arena_started', String(from))
+  } else {
+    const hold: Record<string, number> = {}
+    for (const c of coins) hold[c.symbol] = ((capital / coins.length) * (1 - FEE)) / c.price
+    for (const s of COMPETITOR_KEYS) setCash(s, capital)
+    setMeta('arena_seen', '{}')
+    setMeta('arena_hold', JSON.stringify(hold))
+    setMeta('arena_started', String(Date.now()))
+    snapshot(await getPrices(), true)
+  }
+  setMeta('arena_enabled', '1')
   await safeNotify(
     `🏁 <b>Empieza la competencia (dinero de mentira)</b>\n` +
       `Cada uno con ${capital} USDT ficticios en ${coins.length} monedas:\n` +
-      `${COMPETITOR_KEYS.map((s) => `${COMPETITORS[s].emoji} ${COMPETITORS[s].label}`).join(' · ')} · ${HOLD.emoji} ${HOLD.label}`,
+      `${COMPETITOR_KEYS.map((s) => `${COMPETITORS[s].emoji} ${COMPETITORS[s].label}`).join(' · ')} · ${HOLD.emoji} ${HOLD.label}` +
+      (summary ? `\n\n<b>Simulación de los últimos ${monthsBack} meses:</b>\n${summary}\n\nDesde ahora sigue en vivo.` : ''),
   )
   await runBot() // por si ya hay señales
+}
+
+// ===== Simulación del pasado (mismas reglas que en vivo) =====
+
+/** Velas de 4 h desde `from` (más 200 de antes para calcular las líneas). La última es la que se está formando. */
+async function historySince(symbol: string, from: number): Promise<Bar[]> {
+  const out: Parameters<typeof toBar>[0][] = []
+  let start = from - 200 * H4
+  for (;;) {
+    const res = await fetch(`${REST}/klines?symbol=${symbol}&interval=4h&limit=1000&startTime=${start}`, { cache: 'no-store' })
+    if (!res.ok) break
+    const batch = (await res.json()) as Parameters<typeof toBar>[0][]
+    out.push(...batch)
+    if (batch.length < 1000) break
+    start = batch[batch.length - 1][0] + 1
+  }
+  return out.map(toBar)
+}
+
+type SimPosition = Omit<BotPosition, 'strategy'>
+type SimTrade = Omit<BotTrade, 'id'>
+
+async function replay(symbols: string[], capital: number, from: number): Promise<string> {
+  const series = new Map<string, Bar[]>()
+  for (const s of symbols) {
+    const bars = await historySince(s, from)
+    if (bars.length > 220) series.set(s, bars)
+  }
+  const index = new Map([...series].map(([s, bars]) => [s, new Map(bars.map((b, i) => [b.time * 1000, i]))]))
+  const times = [...new Set([...series.values()].flatMap((bars) => bars.slice(0, -1).map((b) => b.time * 1000)))].filter((t) => t >= from).sort((a, b) => a - b)
+
+  // "No tocar": compra todo al abrir la primera vela
+  const hold: Record<string, number> = {}
+  const firstPrices = [...series].map(([s, bars]) => [s, bars[index.get(s)!.get(times[0]) ?? -1]?.open] as const).filter(([, p]) => p)
+  for (const [s, p] of firstPrices) hold[s] = ((capital / firstPrices.length) * (1 - FEE)) / p!
+
+  const cash = Object.fromEntries(COMPETITOR_KEYS.map((k) => [k, capital])) as Record<Competitor, number>
+  const open = Object.fromEntries(COMPETITOR_KEYS.map((k) => [k, new Map<string, SimPosition>()])) as Record<Competitor, Map<string, SimPosition>>
+  const trades: (SimTrade & { strategy: Competitor })[] = []
+  const equity: { ts: number; strategy: string; value: number }[] = []
+
+  for (const t of times) {
+    const prices = new Map<string, number>()
+    for (const [s, bars] of series) {
+      const i = index.get(s)!.get(t)
+      if (i !== undefined) prices.set(s, bars[i].close)
+    }
+
+    for (const k of COMPETITOR_KEYS) {
+      // 1. Salidas en esta vela
+      for (const [s, p] of open[k]) {
+        const bars = series.get(s)!
+        const i = index.get(s)!.get(t)
+        if (i === undefined || t < p.entry_time) continue
+        const b = bars[i]
+        let exit: { price: number; reason: string } | null = null
+        if (b.low <= p.sl) exit = { price: Math.min(p.sl, b.open), reason: 'sl' }
+        else if (p.tp && b.high >= p.tp) exit = { price: Math.max(p.tp, b.open), reason: 'tp' }
+        else if (k === 'trend' && !above(bars, i)) exit = { price: b.close, reason: 'cross' }
+        else if (p.max_until && t + H4 >= p.max_until) exit = { price: b.close, reason: 'time' }
+        if (!exit) continue
+        const proceeds = p.qty * exit.price * (1 - FEE)
+        cash[k] += proceeds
+        trades.push({ strategy: k, symbol: s, entry: p.entry, exit: exit.price, size: p.size, pnl: proceeds - p.size, reason: exit.reason, entry_time: p.entry_time, exit_time: t + H4 })
+        open[k].delete(s)
+      }
+      // 2. Entradas: señal en esta vela cerrada → compra al abrir la siguiente
+      for (const s of symbols) {
+        const bars = series.get(s)
+        const i = index.get(s)?.get(t)
+        if (!bars || i === undefined || i + 1 >= bars.length || open[k].has(s) || open[k].size >= SLOTS) continue
+        const plan = signalFor(k, bars, i)
+        if (!plan) continue
+        const entry = bars[i + 1].open
+        const levels = planPrices(plan, entry)
+        if (!levels) continue
+        const value = cash[k] + [...open[k]].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+        const size = Math.min(value / SLOTS, cash[k])
+        if (size < MIN_ORDER) continue
+        cash[k] -= size
+        const entryTime = bars[i + 1].time * 1000
+        open[k].set(s, {
+          symbol: s,
+          entry,
+          qty: (size * (1 - FEE)) / entry,
+          size,
+          sl: levels.sl,
+          tp: Number.isFinite(levels.tp) ? levels.tp : null,
+          max_until: plan.maxBars ? entryTime + plan.maxBars * H4 : null,
+          note: plan.note,
+          entry_time: entryTime,
+        })
+      }
+      const value = cash[k] + [...open[k]].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+      equity.push({ ts: t + H4, strategy: k, value })
+    }
+    equity.push({ ts: t + H4, strategy: 'hold', value: Object.entries(hold).reduce((sum, [sym, q]) => sum + q * (prices.get(sym) ?? 0), 0) })
+  }
+
+  // Guardar el resultado: desde acá sigue el bot en vivo
+  const insT = db().prepare('INSERT INTO arena_trades (strategy, symbol, entry, exit, size, pnl, reason, entry_time, exit_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+  for (const tr of trades) insT.run(tr.strategy, tr.symbol, tr.entry, tr.exit, tr.size, tr.pnl, tr.reason, tr.entry_time, tr.exit_time)
+  const insP = db().prepare('INSERT INTO arena_positions (strategy, symbol, entry, qty, size, sl, tp, max_until, note, entry_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+  for (const k of COMPETITOR_KEYS) for (const p of open[k].values()) insP.run(k, p.symbol, p.entry, p.qty, p.size, p.sl, p.tp, p.max_until, p.note, p.entry_time)
+  const insE = db().prepare('INSERT OR REPLACE INTO arena_equity (ts, strategy, value) VALUES (?, ?, ?)')
+  for (const e of equity) insE.run(e.ts, e.strategy, e.value)
+  for (const k of COMPETITOR_KEYS) setCash(k, cash[k])
+  setMeta('arena_hold', JSON.stringify(hold))
+  // Las velas ya simuladas no se vuelven a revisar en vivo
+  const last = times[times.length - 1]
+  setMeta('arena_seen', JSON.stringify(Object.fromEntries(COMPETITOR_KEYS.flatMap((k) => symbols.map((s) => [`${k}:${s}`, last / 1000])))))
+
+  const final = (k: string) => equity.filter((e) => e.strategy === k).at(-1)?.value ?? capital
+  return [...COMPETITOR_KEYS, 'hold']
+    .map((k) => ({ k, v: final(k) }))
+    .sort((a, b) => b.v - a.v)
+    .map(({ k, v }, i) => `${['🥇', '🥈', '🥉'][i] ?? `${i + 1}.`} ${k === 'hold' ? `${HOLD.emoji} ${HOLD.label}` : tag(k as Competitor)}: ${v.toFixed(2)} (${v >= capital ? '+' : ''}${(v - capital).toFixed(2)})`)
+    .join('\n')
 }
 
 export function pauseBot() {
@@ -182,11 +314,10 @@ async function safeNotify(html: string) {
   }
 }
 
-/** La señal de cada competidor en la última vela cerrada (null = no compra) */
-function signalFor(s: Competitor, bars: Bar[]): EntryPlan | null {
-  const last = bars.length - 1
-  if (s === 'trend') return trendSignal(bars, last) ? { slPct: STOP_LOSS, note: 'La amarilla cruzó hacia arriba a la azul: empieza una subida' } : null
-  return PLANNED[s](bars, last)
+/** La señal de cada competidor en la vela i (por defecto, la última cerrada). null = no compra */
+function signalFor(s: Competitor, bars: Bar[], i = bars.length - 1): EntryPlan | null {
+  if (s === 'trend') return trendSignal(bars, i) ? { slPct: STOP_LOSS, note: 'La amarilla cruzó hacia arriba a la azul: empieza una subida' } : null
+  return PLANNED[s](bars, i)
 }
 
 let running = false

@@ -9,6 +9,7 @@ import {
   daysRunning,
   getCapital,
   getCash,
+  getLiveSince,
   getStartedAt,
   hadOldBot,
   HOLD,
@@ -78,6 +79,7 @@ export default async function VivoPage() {
               Capital ficticio de cada uno (USDT)
               <input name="capital" inputMode="decimal" defaultValue={200} className="input tabular mt-1" />
             </label>
+            <MonthsSelect />
             <button className="rounded-lg bg-up px-6 py-2.5 font-semibold text-white active:opacity-80">🏁 Empezar la competencia</button>
           </form>
         </section>
@@ -91,6 +93,8 @@ export default async function VivoPage() {
   const trades = listTrades()
   const equity = listEquity()
   const days = daysRunning(started)
+  const liveSince = getLiveSince()
+  const simulated = liveSince !== null && liveSince - started > 86_400_000 // empezó con simulación del pasado
   const lastRun = Number(getMeta('arena_last_run')) || null
   const error = getMeta('arena_last_error')
 
@@ -117,7 +121,8 @@ export default async function VivoPage() {
       >
         <p className={clsx('font-semibold', running ? 'text-up' : 'text-sma20')}>{running ? '🟢 Compitiendo' : '⏸️ En pausa'}</p>
         <p className="text-sm text-muted">
-          desde el {when(started)} ({Math.floor(days)} {Math.floor(days) === 1 ? 'día' : 'días'}) · {capital} USDT ficticios cada uno · última revisión{' '}
+          desde el {when(started)} ({Math.floor(days)} {Math.floor(days) === 1 ? 'día' : 'días'})
+          {simulated && liveSince && <> · simulado hasta el {when(liveSince)}, en vivo desde ahí</>} · {capital} USDT ficticios cada uno · última revisión{' '}
           {lastRun ? when(lastRun) : '—'}
         </p>
         <div className="flex w-full gap-2 sm:ml-auto sm:w-auto">
@@ -158,7 +163,15 @@ export default async function VivoPage() {
       </Card>
 
       {equity.length >= 2 && (
-        <Card title="La carrera" subtitle="Cuánto vale cada cartera, hora por hora" className="mt-4">
+        <Card
+          title="La carrera"
+          subtitle={
+            simulated && liveSince
+              ? `Cuánto vale cada cartera · hasta el ${when(liveSince)} es simulación con datos reales del pasado, después es en vivo`
+              : 'Cuánto vale cada cartera, hora por hora'
+          }
+          className="mt-4"
+        >
           <EquityCompare
             curves={[
               ...[...COMPETITOR_KEYS, 'hold' as const].map((k) => ({
@@ -254,11 +267,28 @@ export default async function VivoPage() {
               Capital ficticio de cada uno (USDT)
               <input name="capital" inputMode="decimal" defaultValue={capital} className="input tabular mt-1" />
             </label>
+            <MonthsSelect />
             <button className="rounded-lg border border-down/50 px-6 py-2.5 font-semibold text-down">Borrar todo y empezar de nuevo</button>
           </form>
         </div>
       </details>
     </Shell>
+  )
+}
+
+/** Desde cuándo empieza la competencia: con meses, simula ese pasado y después sigue en vivo */
+function MonthsSelect() {
+  return (
+    <label className="block text-sm text-muted sm:w-64">
+      Empezar desde
+      <select name="months" defaultValue="3" className="input mt-1">
+        <option value="0">Hoy (solo en vivo)</option>
+        <option value="1">Hace 1 mes (simula y sigue en vivo)</option>
+        <option value="2">Hace 2 meses (simula y sigue en vivo)</option>
+        <option value="3">Hace 3 meses (simula y sigue en vivo)</option>
+        <option value="6">Hace 6 meses (simula y sigue en vivo)</option>
+      </select>
+    </label>
   )
 }
 

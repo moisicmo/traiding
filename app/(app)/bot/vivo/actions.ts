@@ -7,7 +7,8 @@ import { pauseBot, resumeBot, sellAll, startBot } from '@/lib/paper-bot'
 export async function start(form: FormData) {
   await requireUser()
   const capital = Number(String(form.get('capital')).replace(',', '.'))
-  if (capital >= 20 && capital <= 1_000_000) await startBot(capital)
+  const months = Number(form.get('months') ?? 0)
+  if (capital >= 20 && capital <= 1_000_000) await startBot(capital, [0, 1, 2, 3, 6].includes(months) ? months : 0)
   revalidatePath('/bot/vivo')
 }
 

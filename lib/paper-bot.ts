@@ -33,6 +33,8 @@ export const COMPETITORS = {
   turtle: { emoji: '🐢', label: 'Tortugas', how: 'Compra al romper el máximo de 20 velas; vende al perder el mínimo de 10 velas, stop −8%' },
   golden: { emoji: '✨', label: 'Golden cross', how: 'Compra cuando la media de 50 cruza hacia arriba a la de 200; vende en el cruce contrario, stop −10%' },
   rebal: { emoji: '⚖️', label: 'Rebalanceo', how: 'Mitad en USDT y mitad repartida entre las monedas; cada semana vuelve al 50/50' },
+  // Va último a propósito: en cada vela copia la cartera del líder DESPUÉS de que el líder compró y vendió
+  learn2: { emoji: '🪞', label: 'Aprende v2', how: 'Cada día elige al mejor de los últimos 30 días y copia su cartera completa (lo que ya tiene comprado, en la misma proporción)' },
 } as const
 export type Competitor = keyof typeof COMPETITORS
 export const COMPETITOR_KEYS = Object.keys(COMPETITORS) as Competitor[]
@@ -152,6 +154,8 @@ export async function startBot(capital: number, from: number | null = null) {
     setMeta('arena_seen', '{}')
     setMeta('arena_learn_follow', '[]')
     setMeta('arena_learn_log', '[]')
+    setMeta('arena_learn2_leader', '')
+    setMeta('arena_learn2_log', '[]')
     setMeta('arena_learn_last', String(Date.now()))
     setMeta('arena_hold', JSON.stringify(hold))
     setMeta('arena_started', String(Date.now()))
@@ -210,6 +214,8 @@ async function replay(symbols: string[], capital: number, from: number): Promise
   const hist = Object.fromEntries(COMPETITOR_KEYS.map((k) => [k, [] as number[]])) as Record<Competitor, number[]>
   let follow: Competitor[] = []
   const learnLog: LearnLog[] = []
+  let leader: Competitor | null = null
+  const leaderLog: { ts: number; leader: Competitor | null }[] = []
 
   for (const [n, t] of times.entries()) {
     // 🧠 Aprende: una vez por día elige a quién copiar según los últimos 14 días
@@ -220,6 +226,13 @@ async function replay(symbols: string[], capital: number, from: number): Promise
       })
       if (next.join() !== follow.join()) learnLog.push({ ts: t, follow: next })
       follow = next
+      const best =
+        rankFollow((k) => {
+          const h = hist[k]
+          return [h[Math.max(0, h.length - 1 - LEARN2_BARS)], h[h.length - 1]]
+        }, 1)[0] ?? null
+      if (best !== leader) leaderLog.push({ ts: t, leader: best })
+      leader = best
     }
     const prices = new Map<string, number>()
     for (const [s, bars] of series) {
@@ -234,6 +247,16 @@ async function replay(symbols: string[], capital: number, from: number): Promise
     }
 
     for (const k of COMPETITOR_KEYS) {
+      if (k === 'learn2') {
+        // Copia la cartera del líder (ya actualizada en esta vela) al precio de cierre
+        const myTotal = cash.learn2 + [...open.learn2].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+        const target = leader ? mirrorTargets(open[leader].values(), cash[leader], prices, myTotal) : new Map<string, number>()
+        cash.learn2 = applyMirror(open.learn2, target, prices, cash.learn2, t + H4, leader ? `Copia la cartera de ${tag(leader)}` : '')
+        const value = cash.learn2 + [...open.learn2].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+        equity.push({ ts: t + H4, strategy: k, value })
+        hist[k].push(value)
+        continue
+      }
       // 1. Salidas en esta vela
       for (const [s, p] of open[k]) {
         const bars = series.get(s)!
@@ -292,6 +315,8 @@ async function replay(symbols: string[], capital: number, from: number): Promise
   const insT = db().prepare('INSERT INTO arena_trades (strategy, symbol, entry, exit, size, pnl, reason, entry_time, exit_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
   for (const tr of trades) insT.run(tr.strategy, tr.symbol, tr.entry, tr.exit, tr.size, tr.pnl, tr.reason, tr.entry_time, tr.exit_time)
   for (const k of COMPETITOR_KEYS) for (const p of open[k].values()) insertPosition(k, p)
+  setMeta('arena_learn2_leader', leader ?? '')
+  setMeta('arena_learn2_log', JSON.stringify(leaderLog.slice(-40)))
   setMeta('arena_learn_follow', JSON.stringify(follow))
   setMeta('arena_learn_log', JSON.stringify(learnLog.slice(-40)))
   setMeta('arena_learn_last', String(times[times.length - 1]))
@@ -370,7 +395,7 @@ async function safeNotify(html: string) {
 
 /** La señal de cada competidor en la vela i (por defecto, la última cerrada). null = no compra */
 function signalFor(s: Competitor, bars: Bar[], i = bars.length - 1): EntryPlan | null {
-  if (s === 'rebal' || s === 'learn') return null // no tienen señal propia: uno se reacomoda cada semana, el otro copia a los mejores
+  if (s === 'rebal' || s === 'learn' || s === 'learn2') return null // no tienen señal propia: uno se reacomoda cada semana, el otro copia a los mejores
   if (s === 'trend') return trendSignal(bars, i) ? { slPct: STOP_LOSS, note: 'La amarilla cruzó hacia arriba a la azul: empieza una subida' } : null
   return PLANNED[s](bars, i)
 }
@@ -476,6 +501,9 @@ export async function runBot() {
     }
     setMeta('arena_seen', JSON.stringify(seen))
 
+    // 🪞 Aprende v2: se iguala a la cartera del líder (después de que el líder compró y vendió)
+    mirrorLive(prices)
+
     snapshot(await getPrices())
     setMeta('arena_last_run', String(Date.now()))
     setMeta('arena_last_error', '')
@@ -491,18 +519,20 @@ export async function runBot() {
 
 export const LEARN_BARS = 84 // 14 días de velas de 4 h
 const LEARN_TOP = 3
-const LEARN_FROM: Competitor[] = COMPETITOR_KEYS.filter((k) => k !== 'learn' && k !== 'rebal')
+const LEARN_FROM: Competitor[] = COMPETITOR_KEYS.filter((k) => k !== 'learn' && k !== 'learn2' && k !== 'rebal')
+export const LEARN2_BARS = 180 // 30 días de velas de 4 h
+const MIRROR_TOLERANCE = 0.25 // solo ajusta una moneda si se desvía más de 25% de lo que debería tener
 export type LearnLog = { ts: number; follow: Competitor[] }
 
 /** Los 3 mejores con ganancia en el período (lo que valían al inicio y al final de los 14 días) */
-function rankFollow(valuesOf: (k: Competitor) => [number | undefined, number | undefined]): Competitor[] {
+function rankFollow(valuesOf: (k: Competitor) => [number | undefined, number | undefined], top = LEARN_TOP): Competitor[] {
   return LEARN_FROM.map((k) => {
     const [a, b] = valuesOf(k)
     return { k, r: a && b ? b / a - 1 : 0 }
   })
     .filter((x) => x.r > 0)
     .sort((x, y) => y.r - x.r)
-    .slice(0, LEARN_TOP)
+    .slice(0, top)
     .map((x) => x.k)
 }
 
@@ -521,6 +551,17 @@ async function updateFollow() {
   const valueAt = (k: Competitor, ts: number) =>
     (db().prepare('SELECT value FROM arena_equity WHERE strategy = ? AND ts <= ? ORDER BY ts DESC LIMIT 1').get(k, ts) as { value: number } | undefined)?.value ??
     (db().prepare('SELECT value FROM arena_equity WHERE strategy = ? ORDER BY ts LIMIT 1').get(k) as { value: number } | undefined)?.value
+  const best = rankFollow((k) => [valueAt(k, now - LEARN2_BARS * H4), valueAt(k, now)], 1)[0] ?? null
+  if (best !== learn2Leader()) {
+    setMeta('arena_learn2_leader', best ?? '')
+    const log2 = JSON.parse(getMeta('arena_learn2_log') ?? '[]') as { ts: number; leader: Competitor | null }[]
+    setMeta('arena_learn2_log', JSON.stringify([...log2, { ts: now, leader: best }].slice(-40)))
+    await safeNotify(
+      best
+        ? `🪞 <b>Aprende v2 ahora copia la cartera de</b> ${tag(best)}\n<i>El mejor de los últimos 30 días</i>`
+        : `🪞 <b>Aprende v2 deja de copiar:</b> nadie gana en los últimos 30 días. Pasa todo a USDT.`,
+    )
+  }
   const next = rankFollow((k) => [valueAt(k, now - LEARN_BARS * H4), valueAt(k, now)])
   const prev = JSON.parse(getMeta('arena_learn_follow') ?? '[]') as Competitor[]
   setMeta('arena_learn_last', String(now))
@@ -534,6 +575,39 @@ async function updateFollow() {
       : `🧠 <b>Aprende deja de copiar:</b> ningún competidor gana en los últimos 14 días. Espera en USDT.`,
   )
 }
+
+// ===== 🪞 Aprende v2: copia la cartera completa del líder =====
+
+/** Cuánto debería tener de cada moneda para quedar igual que el líder (en proporción a su propio valor) */
+function mirrorTargets(leaderOpen: Iterable<{ symbol: string; qty: number; entry: number }>, leaderCash: number, prices: Map<string, number>, myTotal: number) {
+  const holdings = [...leaderOpen].map((p) => ({ s: p.symbol, v: p.qty * (prices.get(p.symbol) ?? p.entry) }))
+  const leaderTotal = leaderCash + holdings.reduce((sum, h) => sum + h.v, 0)
+  return new Map(holdings.filter((h) => prices.has(h.s)).map((h) => [h.s, leaderTotal > 0 ? (h.v / leaderTotal) * myTotal : 0]))
+}
+
+/** Ajusta la cartera a los objetivos: vende lo que sobra, compra lo que falta (solo si la diferencia vale la pena) */
+function applyMirror(open: Map<string, SimPosition>, target: Map<string, number>, prices: Map<string, number>, cash: number, time: number, note: string) {
+  for (const [s, p] of open)
+    if (!target.has(s) && prices.has(s)) {
+      cash += p.qty * prices.get(s)! * (1 - FEE)
+      open.delete(s)
+    }
+  for (const [s, value] of target) {
+    const price = prices.get(s)!
+    const p = open.get(s)
+    const now = (p?.qty ?? 0) * price
+    const diff = Math.min(value - now, cash) // no puede comprar más de lo que tiene
+    if (p && Math.abs(value - now) < value * MIRROR_TOLERANCE) continue
+    if (Math.abs(diff) < MIN_ORDER) continue
+    const qty = (p?.qty ?? 0) + (diff > 0 ? (diff * (1 - FEE)) / price : diff / price)
+    cash += diff > 0 ? -diff : -diff * (1 - FEE)
+    open.set(s, { symbol: s, entry: p?.entry ?? price, qty, size: (p?.size ?? 0) + Math.max(diff, 0), sl: 0, tp: null, max_until: null, exit_rule: null, source: null, note, entry_time: p?.entry_time ?? time })
+  }
+  return cash
+}
+
+export const learn2Leader = () => (getMeta('arena_learn2_leader') || null) as Competitor | null
+export const learn2Log = () => (JSON.parse(getMeta('arena_learn2_log') ?? '[]') as { ts: number; leader: Competitor | null }[]).reverse()
 
 export const learnState = () => ({
   follow: JSON.parse(getMeta('arena_learn_follow') ?? '[]') as Competitor[],
@@ -573,6 +647,17 @@ function applyRebalance(open: Map<string, SimPosition>, target: Map<string, numb
     open.set(s, { symbol: s, entry: price, qty, size: qty * price, sl: 0, tp: null, max_until: null, exit_rule: null, source: null, note: 'Rebalanceo semanal 50/50', entry_time: time })
   }
   return cash
+}
+
+function mirrorLive(prices: Map<string, number>) {
+  const leader = learn2Leader()
+  const open = new Map(listPositions('learn2').map((p) => [p.symbol, p as SimPosition]))
+  const myTotal = getCash('learn2') + [...open].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+  const target = leader ? mirrorTargets(listPositions(leader), getCash(leader), prices, myTotal) : new Map<string, number>()
+  const cash = applyMirror(open, target, prices, getCash('learn2'), Date.now(), leader ? `Copia la cartera de ${tag(leader)}` : '')
+  db().prepare('DELETE FROM arena_positions WHERE strategy = ?').run('learn2')
+  for (const p of open.values()) insertPosition('learn2', p)
+  setCash('learn2', cash)
 }
 
 /** Rebalanceo en vivo (guarda en la base de datos) */

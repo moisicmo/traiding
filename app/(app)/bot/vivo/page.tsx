@@ -20,6 +20,8 @@ import {
   listPositions,
   listTrades,
   portfolioValue,
+  learn2Leader,
+  learn2Log,
   learnState,
   REASONS,
   tradeCounts,
@@ -44,6 +46,7 @@ const coin = (symbol: string) => symbol.replace('USDT', '')
 // Un color por competidor (líneas del gráfico y marquitas); "no tocar" en gris
 const COLOR: Record<Competitor | 'hold', string> = {
   learn: '#ffffff',
+  learn2: '#e879f9',
   trendplus: '#7c83ff',
   trend: COLORS.sma50,
   poc: '#b98bff',
@@ -99,10 +102,13 @@ export default async function VivoPage() {
   const prices = await getPrices()
   const running = isRunning()
   const capital = getCapital()
-  const positions = listPositions().filter((p) => p.strategy !== 'rebal') // el rebalanceo tiene un poco de todas: se resume en la tabla
+  // El rebalanceo y Aprende v2 son copias de una cartera entera: se resumen en la tabla, no operación por operación
+  const positions = listPositions().filter((p) => p.strategy !== 'rebal' && p.strategy !== 'learn2')
   const trades = listTrades()
   const counts = tradeCounts()
   const learn = learnState()
+  const leader = learn2Leader()
+  const leaderLog = learn2Log()
   const equity = listEquity()
   const days = daysRunning(started)
   const liveSince = getLiveSince()
@@ -168,6 +174,8 @@ export default async function VivoPage() {
                     ? 'compró todo el primer día'
                     : r.key === 'rebal'
                       ? `${r.cash!.toFixed(0)} en USDT · resto en ${r.open} monedas · se reacomoda cada semana`
+                      : r.key === 'learn2'
+                        ? `${leader ? `copia a ${COMPETITORS[leader].emoji} ${COMPETITORS[leader].label}` : 'no copia a nadie'} · ${r.open} monedas · ${r.cash!.toFixed(0)} libres`
                       : `${r.closed} cerradas · ${r.wins} ganadas · ${r.open}/${SLOTS} abiertas · ${r.cash!.toFixed(0)} libres`}
                 </span>
               </li>
@@ -176,7 +184,26 @@ export default async function VivoPage() {
         </ol>
       </Card>
 
-      <Card title="🧠 A quién copia el que aprende" subtitle="Cada día mira los últimos 14 días y copia las compras de los 3 mejores que vienen ganando" className="mt-4">
+      <Card title="🧠 A quién copian los que aprenden" className="mt-4">
+        <p className="text-sm">
+          <b>🪞 Aprende v2</b> (copia la cartera completa del mejor de los últimos 30 días):{' '}
+          {leader ? <Badge k={leader} /> : <span className="text-muted">nadie, está en USDT</span>}
+        </p>
+        {leaderLog.length > 0 && (
+          <details className="mt-2">
+            <summary className="cursor-pointer text-sm text-muted">Sus cambios de líder ({leaderLog.length})</summary>
+            <ul className="mt-2 space-y-1 text-xs">
+              {leaderLog.map((l) => (
+                <li key={l.ts} className="flex flex-wrap items-center gap-1">
+                  <span className="w-28 text-muted">{when(l.ts)}</span>
+                  {l.leader ? <Badge k={l.leader} /> : <span className="text-muted">a nadie</span>}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        <hr className="my-3 border-border" />
+        <p className="text-sm font-semibold">🧠 Aprende (copia las compras nuevas de los 3 mejores de los últimos 14 días)</p>
         <p className="text-sm">
           Ahora copia a:{' '}
           {learn.follow.length ? (

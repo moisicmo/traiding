@@ -11,6 +11,8 @@ import {
   getCapital,
   getCash,
   getJob,
+  getSizing,
+  maxOpen,
   getLiveSince,
   getStartedAt,
   hadOldBot,
@@ -37,6 +39,7 @@ import { pause, panic, resume, start } from './actions'
 import { JobProgress } from '@/components/job-progress'
 import { metrics } from '@/lib/podium'
 import { SubmitButton } from '@/components/submit-button'
+import { SizingFields } from '@/components/sizing-fields'
 
 export const metadata = { title: 'Bot en vivo · Trading' }
 
@@ -103,12 +106,13 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
               </li>
             ))}
           </ul>
-          <form action={start} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+          <form action={start} className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start">
             <label className="block text-sm text-muted sm:w-56">
-              Capital ficticio de cada uno (USDT)
+              Capital de cada uno (USDT)
               <input name="capital" inputMode="decimal" defaultValue={200} className="input tabular mt-1" />
             </label>
             <FromDate />
+            <SizingFields initial={getSizing()} />
             <SubmitButton pending="Empezando…" className="rounded-lg bg-up px-6 py-2.5 font-semibold text-white active:opacity-80 disabled:opacity-60">
               🏁 Empezar la competencia
             </SubmitButton>
@@ -120,6 +124,9 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
   const prices = await getPrices()
   const running = isRunning()
   const capital = getCapital()
+  const sizing = getSizing()
+  const sizingText =
+    sizing.mode === 'fixed' ? `${sizing.amount} USDT por compra` : sizing.mode === 'risk' ? `cada compra arriesga ${sizing.risk}% de la cartera` : `1/4 de la cartera por compra (máx. ${maxOpen(sizing)})`
   // El rebalanceo y Aprende v2 son copias de una cartera entera: se resumen en la tabla, no operación por operación
   const positions = listPositions().filter((p) => p.strategy !== 'rebal' && p.strategy !== 'learn2')
   const trades = listTrades()
@@ -158,7 +165,7 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
         <p className={clsx('font-semibold', running ? 'text-up' : 'text-sma20')}>{running ? '🟢 Compitiendo' : '⏸️ En pausa'}</p>
         <p className="text-sm text-muted">
           desde el {when(started)} ({Math.floor(days)} {Math.floor(days) === 1 ? 'día' : 'días'})
-          {simulated && liveSince && <> · simulado hasta el {when(liveSince)}, en vivo desde ahí</>} · {capital} USDT ficticios cada uno · última revisión{' '}
+          {simulated && liveSince && <> · simulado hasta el {when(liveSince)}, en vivo desde ahí</>} · {capital} USDT ficticios cada uno · {sizingText} · última revisión{' '}
           {lastRun ? when(lastRun) : '—'}
         </p>
         <div className="flex w-full gap-2 sm:ml-auto sm:w-auto">
@@ -195,7 +202,7 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
                       ? `${r.cash!.toFixed(0)} en USDT · resto en ${r.open} monedas · se reacomoda cada semana`
                       : r.key === 'learn2'
                         ? `${leader ? `copia a ${COMPETITORS[leader].emoji} ${COMPETITORS[leader].label}` : 'no copia a nadie'} · ${r.open} monedas · ${r.cash!.toFixed(0)} libres`
-                      : `${r.closed} cerradas · ${r.wins} ganadas · ${r.open}/${SLOTS} abiertas · ${r.cash!.toFixed(0)} libres`}
+                      : `${r.closed} cerradas · ${r.wins} ganadas · ${r.open}${sizing.mode === 'auto' ? `/${SLOTS}` : ''} abiertas · ${r.cash!.toFixed(0)} libres`}
                 </span>
               </li>
             )
@@ -354,12 +361,13 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
               </li>
             ))}
           </ul>
-          <form action={start} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+          <form action={start} className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start">
             <label className="block text-sm text-muted sm:w-56">
-              Capital ficticio de cada uno (USDT)
+              Capital de cada uno (USDT)
               <input name="capital" inputMode="decimal" defaultValue={capital} className="input tabular mt-1" />
             </label>
             <FromDate />
+            <SizingFields initial={getSizing()} />
             <SubmitButton pending="Empezando…" className="rounded-lg border border-down/50 px-6 py-2.5 font-semibold text-down disabled:opacity-60">
               Borrar todo y empezar de nuevo
             </SubmitButton>

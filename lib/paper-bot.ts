@@ -16,7 +16,31 @@ import { getMarket } from './market'
 import { exitBy, type EntryPlan, type ExitRule } from './signals'
 import { esc, notify } from './telegram'
 
-export const SLOTS = 4
+export const SLOTS = 4 // modo automático: hasta 4 operaciones, 1/4 de la cartera cada una
+
+// ===== Monto por operación =====
+export type Sizing = { mode: 'auto' | 'fixed' | 'risk'; amount: number; risk: number }
+export const DEFAULT_SIZING: Sizing = { mode: 'auto', amount: 100, risk: 2 }
+export const getSizing = () => ({ ...DEFAULT_SIZING, ...(JSON.parse(getMeta('arena_sizing') ?? '{}') as Partial<Sizing>) })
+const STOP_IF_NONE = 10 // % para calcular el riesgo de las estrategias sin stop fijo (Tendencia+)
+
+/** Cuántas operaciones puede tener abiertas a la vez */
+export const maxOpen = (z: Sizing) => (z.mode === 'auto' ? SLOTS : 20)
+
+/**
+ * Cuánto pone en una compra:
+ *  auto  → 1/4 del valor de la cartera
+ *  fixed → el monto que elegiste (por ejemplo 100 USDT)
+ *  risk  → lo necesario para que, si salta el stop, pierda `risk`% de la cartera (stop cerca = más plata; lejos = menos)
+ */
+function positionSize(z: Sizing, value: number, cash: number, entry: number, sl: number) {
+  if (z.mode === 'fixed') return Math.min(z.amount, cash)
+  if (z.mode === 'risk') {
+    const stopPct = sl > 0 ? (entry - sl) / entry : STOP_IF_NONE / 100
+    return Math.min((value * (z.risk / 100)) / Math.max(stopPct, 0.01), value * 0.5, cash) // nunca más de la mitad en una sola
+  }
+  return Math.min(value / SLOTS, cash)
+}
 export const STOP_LOSS = defaultParams('trend', '4h').sl // 8%
 const MIN_ORDER = 5 // Binance no deja operar menos de 5 USDT
 const H4 = 4 * 3_600_000
@@ -152,10 +176,11 @@ const breathe = () => new Promise((r) => setImmediate(r))
  * Empieza la competencia EN SEGUNDO PLANO y vuelve enseguida: la pantalla muestra la barra de progreso.
  * (La simulación puede tardar un minuto; esperar en la misma petición dejaba la página en blanco.)
  */
-export function startBotInBackground(capital: number, from: number | null) {
+export function startBotInBackground(capital: number, from: number | null, sizing: Sizing = DEFAULT_SIZING) {
   const job = getJob()
   if (job?.status === 'running' && Date.now() - job.started < 10 * 60_000) return // ya hay una en marcha
   setMeta('arena_enabled', '0') // el bot en vivo espera a que termine
+  setMeta('arena_sizing', JSON.stringify(sizing))
   setMeta('arena_job', JSON.stringify({ status: 'running', pct: 0, message: 'Preparando…', started: Date.now() }))
   void startBot(capital, from)
     .then(() => setMeta('arena_job', JSON.stringify({ status: 'done', pct: 100, message: 'Listo', started: Date.now() })))
@@ -228,6 +253,7 @@ type SimPosition = Omit<BotPosition, 'strategy'>
 type SimTrade = Omit<BotTrade, 'id'>
 
 async function replay(symbols: string[], capital: number, from: number): Promise<string> {
+  const sizing = getSizing()
   const series = new Map<string, Bar[]>()
   for (const [k, s] of symbols.entries()) {
     progress(5 + (k / symbols.length) * 40, `Bajando el historial de ${coinOf(s)} (${k + 1} de ${symbols.length})…`)
@@ -319,14 +345,14 @@ async function replay(symbols: string[], capital: number, from: number): Promise
       for (const s of symbols) {
         const bars = series.get(s)
         const i = index.get(s)?.get(t)
-        if (!bars || i === undefined || i + 1 >= bars.length || open[k].has(s) || open[k].size >= SLOTS) continue
+        if (!bars || i === undefined || i + 1 >= bars.length || open[k].has(s) || open[k].size >= maxOpen(sizing)) continue
         const { plan, source } = k === 'learn' ? copyBest(follow, bars, i) : { plan: signalFor(k, bars, i), source: null }
         if (!plan) continue
         const entry = bars[i + 1].open
         const levels = planPrices(plan, entry)
         if (!levels) continue
         const value = cash[k] + [...open[k]].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
-        const size = Math.min(value / SLOTS, cash[k])
+        const size = positionSize(sizing, value, cash[k], entry, levels.sl)
         if (size < MIN_ORDER) continue
         cash[k] -= size
         const entryTime = bars[i + 1].time * 1000
@@ -497,6 +523,7 @@ export async function runBot() {
     }
     // 🧠 Aprende: una vez por día decide a quién copiar
     if (Date.now() - Number(getMeta('arena_learn_last') ?? 0) >= 6 * H4) await updateFollow()
+    const sizing = getSizing()
     const follow = JSON.parse(getMeta('arena_learn_follow') ?? '[]') as Competitor[]
 
     for (const strategy of COMPETITOR_KEYS) {
@@ -510,12 +537,12 @@ export async function runBot() {
         const { plan, source } = strategy === 'learn' ? copyBest(follow, d.bars, d.bars.length - 1) : { plan: signalFor(strategy, d.bars), source: null }
         if (!plan) continue
         const held = listPositions(strategy)
-        if (held.length >= SLOTS || held.some((p) => p.symbol === symbol)) continue
+        if (held.length >= maxOpen(sizing) || held.some((p) => p.symbol === symbol)) continue
 
         const entry = d.live.close
         const levels = planPrices(plan, entry)
         if (!levels) continue // el precio ya se fue (por ejemplo, ya pasó el objetivo)
-        const size = Math.min(portfolioValue(strategy, prices) / SLOTS, getCash(strategy))
+        const size = positionSize(sizing, portfolioValue(strategy, prices), getCash(strategy), entry, levels.sl)
         if (size < MIN_ORDER) continue
         setCash(strategy, getCash(strategy) - size)
         insertPosition(strategy, {

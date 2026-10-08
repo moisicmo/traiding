@@ -10,6 +10,7 @@ import {
   daysRunning,
   getCapital,
   getCash,
+  getJob,
   getLiveSince,
   getStartedAt,
   hadOldBot,
@@ -33,6 +34,8 @@ import { BotTabs } from '@/components/bot-tabs'
 import { CoinIcon } from '@/components/coin-icon'
 import { EquityCompare } from '@/components/equity-compare'
 import { pause, panic, resume, start } from './actions'
+import { JobProgress } from '@/components/job-progress'
+import { SubmitButton } from '@/components/submit-button'
 
 export const metadata = { title: 'Bot en vivo · Trading' }
 
@@ -62,6 +65,14 @@ const COLOR: Record<Competitor | 'hold', string> = {
 const NAME = (k: Competitor | 'hold') => (k === 'hold' ? `${HOLD.emoji} ${HOLD.label}` : `${COMPETITORS[k].emoji} ${COMPETITORS[k].label}`)
 
 export default async function VivoPage() {
+  const job = getJob()
+  // Mientras se prepara la competencia, solo la barra de progreso (el resto se está borrando y rearmando)
+  if (job?.status === 'running')
+    return (
+      <Shell>
+        <JobProgress initial={job} />
+      </Shell>
+    )
   const started = getStartedAt()
 
   if (!started)
@@ -69,6 +80,9 @@ export default async function VivoPage() {
       <Shell>
         <section className="mt-4 rounded-2xl border border-border bg-panel p-5">
           <h2 className="text-lg font-semibold">🏁 Competencia de técnicas con dinero de mentira</h2>
+          {job?.status === 'error' && (
+            <p className="mt-2 rounded-lg bg-down/15 p-3 text-sm text-down">No se pudo preparar la competencia: {job.message}. Intenta de nuevo.</p>
+          )}
           {hadOldBot() && (
             <p className="mt-2 rounded-lg bg-sma20/10 p-3 text-sm text-sma20">
               Nueva versión: ahora compiten varias técnicas a la vez. Para que la carrera sea justa, todas empiezan juntas desde cero (el bot anterior de
@@ -93,7 +107,9 @@ export default async function VivoPage() {
               <input name="capital" inputMode="decimal" defaultValue={200} className="input tabular mt-1" />
             </label>
             <FromDate />
-            <button className="rounded-lg bg-up px-6 py-2.5 font-semibold text-white active:opacity-80">🏁 Empezar la competencia</button>
+            <SubmitButton pending="Empezando…" className="rounded-lg bg-up px-6 py-2.5 font-semibold text-white active:opacity-80 disabled:opacity-60">
+              🏁 Empezar la competencia
+            </SubmitButton>
           </form>
         </section>
       </Shell>
@@ -154,6 +170,7 @@ export default async function VivoPage() {
           )}
         </div>
         {error && <p className="w-full text-sm text-down">Último error: {error}</p>}
+        {job?.status === 'error' && <p className="w-full text-sm text-down">No se pudo preparar la competencia: {job.message}. Intenta de nuevo.</p>}
       </section>
 
       <Card title="🏆 Tabla de posiciones" subtitle="Quién va ganando ahora (el valor incluye lo que tiene comprado, al precio de este momento)" className="mt-4">
@@ -339,7 +356,9 @@ export default async function VivoPage() {
               <input name="capital" inputMode="decimal" defaultValue={capital} className="input tabular mt-1" />
             </label>
             <FromDate />
-            <button className="rounded-lg border border-down/50 px-6 py-2.5 font-semibold text-down">Borrar todo y empezar de nuevo</button>
+            <SubmitButton pending="Empezando…" className="rounded-lg border border-down/50 px-6 py-2.5 font-semibold text-down disabled:opacity-60">
+              Borrar todo y empezar de nuevo
+            </SubmitButton>
           </form>
         </div>
       </details>

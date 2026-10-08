@@ -133,8 +133,41 @@ export function portfolioValue(s: Competitor, prices: Map<string, number>) {
  * Empieza la competencia. Con `from` (una fecha del pasado), primero SIMULA desde ahí hasta hoy con las mismas reglas
  * (vela por vela, sin ver el futuro) y después sigue en vivo con lo que haya quedado comprado.
  */
+// ===== Progreso de "empezar la competencia" (corre en segundo plano) =====
+
+export type Job = { status: 'running' | 'done' | 'error'; pct: number; message: string; started: number }
+export const getJob = () => JSON.parse(getMeta('arena_job') ?? 'null') as Job | null
+let lastSaved = 0
+function progress(pct: number, message: string, force = false) {
+  // Se guarda como mucho 2 veces por segundo (no hace falta más para la barra)
+  if (!force && Date.now() - lastSaved < 500) return
+  lastSaved = Date.now()
+  const job = getJob()
+  setMeta('arena_job', JSON.stringify({ status: 'running', pct: Math.round(pct), message, started: job?.started ?? Date.now() }))
+}
+/** Pausa cortita para que el servidor siga atendiendo la página mientras simula */
+const breathe = () => new Promise((r) => setImmediate(r))
+
+/**
+ * Empieza la competencia EN SEGUNDO PLANO y vuelve enseguida: la pantalla muestra la barra de progreso.
+ * (La simulación puede tardar un minuto; esperar en la misma petición dejaba la página en blanco.)
+ */
+export function startBotInBackground(capital: number, from: number | null) {
+  const job = getJob()
+  if (job?.status === 'running' && Date.now() - job.started < 10 * 60_000) return // ya hay una en marcha
+  setMeta('arena_enabled', '0') // el bot en vivo espera a que termine
+  setMeta('arena_job', JSON.stringify({ status: 'running', pct: 0, message: 'Preparando…', started: Date.now() }))
+  void startBot(capital, from)
+    .then(() => setMeta('arena_job', JSON.stringify({ status: 'done', pct: 100, message: 'Listo', started: Date.now() })))
+    .catch((e) => {
+      console.error('[bot] No se pudo empezar la competencia:', e)
+      setMeta('arena_job', JSON.stringify({ status: 'error', pct: 0, message: (e as Error).message, started: Date.now() }))
+    })
+}
+
 export async function startBot(capital: number, from: number | null = null) {
   ensureTables()
+  progress(2, 'Revisando qué monedas pasan el filtro de seguridad…', true)
   const coins = (await getMarket()).coins
   db().exec('DELETE FROM arena_positions; DELETE FROM arena_trades; DELETE FROM arena_equity;')
   setMeta('arena_capital', String(capital))
@@ -163,6 +196,7 @@ export async function startBot(capital: number, from: number | null = null) {
     rebalance(coins.map((c) => c.symbol), prices, Date.now())
     snapshot(prices, true)
   }
+  progress(99, 'Primera revisión en vivo…', true)
   setMeta('arena_enabled', '1')
   await safeNotify(
     `🏁 <b>Empieza la competencia (dinero de mentira)</b>\n` +
@@ -195,7 +229,8 @@ type SimTrade = Omit<BotTrade, 'id'>
 
 async function replay(symbols: string[], capital: number, from: number): Promise<string> {
   const series = new Map<string, Bar[]>()
-  for (const s of symbols) {
+  for (const [k, s] of symbols.entries()) {
+    progress(5 + (k / symbols.length) * 40, `Bajando el historial de ${coinOf(s)} (${k + 1} de ${symbols.length})…`)
     const bars = await historySince(s, from)
     if (bars.length > 320) series.set(s, bars)
   }
@@ -217,7 +252,12 @@ async function replay(symbols: string[], capital: number, from: number): Promise
   let leader: Competitor | null = null
   const leaderLog: { ts: number; leader: Competitor | null }[] = []
 
+  const day = (ms: number) => new Date(ms).toLocaleDateString('es-BO', { day: 'numeric', month: 'short', year: 'numeric' })
   for (const [n, t] of times.entries()) {
+    if (n % 30 === 0) {
+      progress(45 + (n / times.length) * 50, `Simulando el ${day(t)}…`)
+      await breathe()
+    }
     // 🧠 Aprende: una vez por día elige a quién copiar según los últimos 14 días
     if (n % 6 === 0 && n >= 6) {
       const next = rankFollow((k) => {
@@ -311,6 +351,7 @@ async function replay(symbols: string[], capital: number, from: number): Promise
     equity.push({ ts: t + H4, strategy: 'hold', value: Object.entries(hold).reduce((sum, [sym, q]) => sum + q * (prices.get(sym) ?? 0), 0) })
   }
 
+  progress(96, 'Guardando los resultados…', true)
   // Guardar el resultado: desde acá sigue el bot en vivo
   const insT = db().prepare('INSERT INTO arena_trades (strategy, symbol, entry, exit, size, pnl, reason, entry_time, exit_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
   for (const tr of trades) insT.run(tr.strategy, tr.symbol, tr.entry, tr.exit, tr.size, tr.pnl, tr.reason, tr.entry_time, tr.exit_time)

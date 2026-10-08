@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { requireUser } from '@/auth'
-import { pauseBot, resumeBot, sellAll, startBot } from '@/lib/paper-bot'
+import { pauseBot, resumeBot, sellAll, startBotInBackground } from '@/lib/paper-bot'
 
 export async function start(form: FormData) {
   await requireUser()
@@ -11,7 +11,7 @@ export async function start(form: FormData) {
   const raw = String(form.get('from') ?? '')
   const from = raw ? Date.parse(`${raw}T04:00:00Z`) : NaN // medianoche de Bolivia
   const valid = Number.isFinite(from) && from < Date.now() - 86_400_000 && from >= Date.now() - 366 * 86_400_000
-  if (capital >= 20 && capital <= 1_000_000) await startBot(capital, valid ? from : null)
+  if (capital >= 20 && capital <= 1_000_000) startBotInBackground(capital, valid ? from : null)
   revalidatePath('/bot/vivo')
 }
 

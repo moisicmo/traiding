@@ -13,7 +13,7 @@ import { above, defaultParams, FEE, planPrices, PLANNED, trendSignal } from './b
 import { db, getMeta, setMeta } from './db'
 import { getPrices } from './binance-account'
 import { getMarket } from './market'
-import type { EntryPlan } from './signals'
+import { exitBy, type EntryPlan, type ExitRule } from './signals'
 import { esc, notify } from './telegram'
 
 export const SLOTS = 4
@@ -26,6 +26,11 @@ export const COMPETITORS = {
   poc: { emoji: '📊', label: 'POC', how: 'Compra cuando el precio baja a tocar el nivel con más volumen; vende con +6%, −4% o a los ~10 días' },
   fib: { emoji: '🌀', label: 'Fibonacci', how: 'Compra en el retroceso del 61,8% de una subida; vende al volver al máximo; stop pasado el 78,6%' },
   smc: { emoji: '🏦', label: 'Smart Money', how: 'Compra al volver al order block después de un quiebre; vende ganando 2 veces lo arriesgado' },
+  rsi: { emoji: '📉', label: 'RSI', how: 'Compra cuando el RSI sale de sobrevendido (vuelve a subir de 30); vende cuando pasa de 70, stop −8%' },
+  boll: { emoji: '〰️', label: 'Bollinger', how: 'Compra cuando el precio vuelve a entrar por la banda de abajo; vende en la línea del medio, stop −5%' },
+  turtle: { emoji: '🐢', label: 'Tortugas', how: 'Compra al romper el máximo de 20 velas; vende al perder el mínimo de 10 velas, stop −8%' },
+  golden: { emoji: '✨', label: 'Golden cross', how: 'Compra cuando la media de 50 cruza hacia arriba a la de 200; vende en el cruce contrario, stop −10%' },
+  rebal: { emoji: '⚖️', label: 'Rebalanceo', how: 'Mitad en USDT y mitad repartida entre las monedas; cada semana vuelve al 50/50' },
 } as const
 export type Competitor = keyof typeof COMPETITORS
 export const COMPETITOR_KEYS = Object.keys(COMPETITORS) as Competitor[]
@@ -40,6 +45,7 @@ export type BotPosition = {
   sl: number
   tp: number | null
   max_until: number | null // ms: vender igual si llega esta hora
+  exit_rule: ExitRule | null // su regla de venta (RSI > 70, etc.)
   note: string
   entry_time: number
 }
@@ -66,6 +72,10 @@ function ensureTables() {
       PRIMARY KEY (ts, strategy)
     );
   `)
+  // Columna agregada después (bases de datos que ya existían)
+  try {
+    db().exec('ALTER TABLE arena_positions ADD COLUMN exit_rule TEXT')
+  } catch {}
 }
 
 const rows = <T>(sql: string, ...args: (string | number)[]) => {
@@ -82,6 +92,8 @@ export const getLiveSince = () => Number(getMeta('arena_live_since') ?? 0) || nu
 export const hadOldBot = () => !!Number(getMeta('bot_started') ?? 0)
 export const getCash = (s: Competitor) => Number(getMeta(`arena_cash_${s}`) ?? 0)
 const setCash = (s: Competitor, v: number) => setMeta(`arena_cash_${s}`, String(v))
+/** "2026-10-08" en hora de Bolivia, corrido `offset` días (para el campo de fecha) */
+export const boliviaDay = (offset = 0) => new Date(Date.now() + offset * 86_400_000 - 4 * 3_600_000).toISOString().slice(0, 10)
 /** Días desde que se prendió el bot */
 export const daysRunning = (started: number) => Math.max(0, (Date.now() - started) / 86_400_000)
 export const listPositions = (s?: Competitor) =>
@@ -89,6 +101,14 @@ export const listPositions = (s?: Competitor) =>
     ? rows<BotPosition>('SELECT * FROM arena_positions WHERE strategy = ? ORDER BY entry_time', s)
     : rows<BotPosition>('SELECT * FROM arena_positions ORDER BY entry_time')
 export const listTrades = (limit = 200) => rows<BotTrade>('SELECT * FROM arena_trades ORDER BY exit_time DESC LIMIT ?', limit)
+/** Cuántas operaciones cerró cada competidor y cuántas ganó (todas, no solo las últimas) */
+export const tradeCounts = () =>
+  new Map(
+    rows<{ strategy: string; n: number; w: number }>('SELECT strategy, COUNT(*) AS n, SUM(pnl > 0) AS w FROM arena_trades GROUP BY strategy').map((r) => [
+      r.strategy,
+      { closed: r.n, wins: r.w },
+    ]),
+  )
 export const listEquity = () => rows<{ ts: number; strategy: string; value: number }>('SELECT * FROM arena_equity ORDER BY ts')
 
 /** "No tocar": al prender, repartimos el capital entre las monedas del filtro y no las tocamos más */
@@ -104,10 +124,10 @@ export function portfolioValue(s: Competitor, prices: Map<string, number>) {
 // ===== Prender, pausar, reiniciar =====
 
 /**
- * Empieza la competencia. Con monthsBack > 0, primero SIMULA desde esa fecha hasta hoy con las mismas reglas
+ * Empieza la competencia. Con `from` (una fecha del pasado), primero SIMULA desde ahí hasta hoy con las mismas reglas
  * (vela por vela, sin ver el futuro) y después sigue en vivo con lo que haya quedado comprado.
  */
-export async function startBot(capital: number, monthsBack = 0) {
+export async function startBot(capital: number, from: number | null = null) {
   ensureTables()
   const coins = (await getMarket()).coins
   db().exec('DELETE FROM arena_positions; DELETE FROM arena_trades; DELETE FROM arena_equity;')
@@ -117,8 +137,8 @@ export async function startBot(capital: number, monthsBack = 0) {
   setMeta('bot_enabled', '0') // apaga el bot de la versión anterior
 
   let summary = ''
-  if (monthsBack > 0) {
-    const from = Date.now() - monthsBack * 30.44 * 86_400_000
+  const fromDate = from ? new Date(from).toLocaleDateString('es-BO', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
+  if (from) {
     summary = await replay(coins.map((c) => c.symbol), capital, from)
     setMeta('arena_started', String(from))
   } else {
@@ -128,14 +148,16 @@ export async function startBot(capital: number, monthsBack = 0) {
     setMeta('arena_seen', '{}')
     setMeta('arena_hold', JSON.stringify(hold))
     setMeta('arena_started', String(Date.now()))
-    snapshot(await getPrices(), true)
+    const prices = await getPrices()
+    rebalance(coins.map((c) => c.symbol), prices, Date.now())
+    snapshot(prices, true)
   }
   setMeta('arena_enabled', '1')
   await safeNotify(
     `🏁 <b>Empieza la competencia (dinero de mentira)</b>\n` +
       `Cada uno con ${capital} USDT ficticios en ${coins.length} monedas:\n` +
       `${COMPETITOR_KEYS.map((s) => `${COMPETITORS[s].emoji} ${COMPETITORS[s].label}`).join(' · ')} · ${HOLD.emoji} ${HOLD.label}` +
-      (summary ? `\n\n<b>Simulación de los últimos ${monthsBack} meses:</b>\n${summary}\n\nDesde ahora sigue en vivo.` : ''),
+      (summary ? `\n\n<b>Simulación desde el ${fromDate}:</b>\n${summary}\n\nDesde ahora sigue en vivo.` : ''),
   )
   await runBot() // por si ya hay señales
 }
@@ -145,7 +167,7 @@ export async function startBot(capital: number, monthsBack = 0) {
 /** Velas de 4 h desde `from` (más 200 de antes para calcular las líneas). La última es la que se está formando. */
 async function historySince(symbol: string, from: number): Promise<Bar[]> {
   const out: Parameters<typeof toBar>[0][] = []
-  let start = from - 200 * H4
+  let start = from - 300 * H4
   for (;;) {
     const res = await fetch(`${REST}/klines?symbol=${symbol}&interval=4h&limit=1000&startTime=${start}`, { cache: 'no-store' })
     if (!res.ok) break
@@ -164,7 +186,7 @@ async function replay(symbols: string[], capital: number, from: number): Promise
   const series = new Map<string, Bar[]>()
   for (const s of symbols) {
     const bars = await historySince(s, from)
-    if (bars.length > 220) series.set(s, bars)
+    if (bars.length > 320) series.set(s, bars)
   }
   const index = new Map([...series].map(([s, bars]) => [s, new Map(bars.map((b, i) => [b.time * 1000, i]))]))
   const times = [...new Set([...series.values()].flatMap((bars) => bars.slice(0, -1).map((b) => b.time * 1000)))].filter((t) => t >= from).sort((a, b) => a - b)
@@ -186,6 +208,12 @@ async function replay(symbols: string[], capital: number, from: number): Promise
       if (i !== undefined) prices.set(s, bars[i].close)
     }
 
+    // ⚖️ Rebalanceo: al empezar y después cada semana (42 velas de 4 h), al precio de cierre de esta vela
+    if ((t - times[0]) % (42 * H4) === 0) {
+      const target = rebalTargets(symbols.filter((s) => prices.has(s)), cash.rebal + [...open.rebal].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0))
+      cash.rebal = applyRebalance(open.rebal, target, prices, cash.rebal, t + H4)
+    }
+
     for (const k of COMPETITOR_KEYS) {
       // 1. Salidas en esta vela
       for (const [s, p] of open[k]) {
@@ -197,6 +225,7 @@ async function replay(symbols: string[], capital: number, from: number): Promise
         if (b.low <= p.sl) exit = { price: Math.min(p.sl, b.open), reason: 'sl' }
         else if (p.tp && b.high >= p.tp) exit = { price: Math.max(p.tp, b.open), reason: 'tp' }
         else if (k === 'trend' && !above(bars, i)) exit = { price: b.close, reason: 'cross' }
+        else if (p.exit_rule && t > p.entry_time && exitBy(p.exit_rule, bars, i)) exit = { price: b.close, reason: 'rule' }
         else if (p.max_until && t + H4 >= p.max_until) exit = { price: b.close, reason: 'time' }
         if (!exit) continue
         const proceeds = p.qty * exit.price * (1 - FEE)
@@ -227,6 +256,7 @@ async function replay(symbols: string[], capital: number, from: number): Promise
           sl: levels.sl,
           tp: Number.isFinite(levels.tp) ? levels.tp : null,
           max_until: plan.maxBars ? entryTime + plan.maxBars * H4 : null,
+          exit_rule: plan.exitRule ?? null,
           note: plan.note,
           entry_time: entryTime,
         })
@@ -240,8 +270,8 @@ async function replay(symbols: string[], capital: number, from: number): Promise
   // Guardar el resultado: desde acá sigue el bot en vivo
   const insT = db().prepare('INSERT INTO arena_trades (strategy, symbol, entry, exit, size, pnl, reason, entry_time, exit_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
   for (const tr of trades) insT.run(tr.strategy, tr.symbol, tr.entry, tr.exit, tr.size, tr.pnl, tr.reason, tr.entry_time, tr.exit_time)
-  const insP = db().prepare('INSERT INTO arena_positions (strategy, symbol, entry, qty, size, sl, tp, max_until, note, entry_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-  for (const k of COMPETITOR_KEYS) for (const p of open[k].values()) insP.run(k, p.symbol, p.entry, p.qty, p.size, p.sl, p.tp, p.max_until, p.note, p.entry_time)
+  for (const k of COMPETITOR_KEYS) for (const p of open[k].values()) insertPosition(k, p)
+  setMeta('arena_rebal_last', String(Math.floor((times[times.length - 1] - times[0]) / (42 * H4)) * 42 * H4 + times[0] + H4))
   const insE = db().prepare('INSERT OR REPLACE INTO arena_equity (ts, strategy, value) VALUES (?, ?, ?)')
   for (const e of equity) insE.run(e.ts, e.strategy, e.value)
   for (const k of COMPETITOR_KEYS) setCash(k, cash[k])
@@ -276,7 +306,7 @@ export async function sellAll() {
 // ===== El ciclo: cada 5 minutos =====
 
 async function closedBars(symbol: string): Promise<{ bars: Bar[]; live: Bar } | null> {
-  const res = await fetch(`${REST}/klines?symbol=${symbol}&interval=4h&limit=200`, { cache: 'no-store' })
+  const res = await fetch(`${REST}/klines?symbol=${symbol}&interval=4h&limit=300`, { cache: 'no-store' })
   if (!res.ok) return null
   const all = ((await res.json()) as Parameters<typeof toBar>[0][]).map(toBar)
   if (all.length < 62) return null
@@ -316,6 +346,7 @@ async function safeNotify(html: string) {
 
 /** La señal de cada competidor en la vela i (por defecto, la última cerrada). null = no compra */
 function signalFor(s: Competitor, bars: Bar[], i = bars.length - 1): EntryPlan | null {
+  if (s === 'rebal') return null // no compra por señales: se reacomoda cada semana
   if (s === 'trend') return trendSignal(bars, i) ? { slPct: STOP_LOSS, note: 'La amarilla cruzó hacia arriba a la azul: empieza una subida' } : null
   return PLANNED[s](bars, i)
 }
@@ -352,6 +383,7 @@ export async function runBot() {
         reason = 'tp'
         price = Math.max(p.tp, d.live.close)
       } else if (p.strategy === 'trend' && !above(d.bars, last) && d.bars[last].time * 1000 >= p.entry_time) reason = 'cross'
+      else if (p.exit_rule && d.bars[last].time * 1000 > p.entry_time && exitBy(p.exit_rule, d.bars, last)) reason = 'rule'
       else if (p.max_until && Date.now() >= p.max_until) reason = 'time'
       if (!reason) continue
 
@@ -367,6 +399,12 @@ export async function runBot() {
 
     // 2. Entradas: cada competidor revisa cada moneda en la última vela cerrada
     const prices = new Map([...data].map(([s, d]) => [s, d.live.close]))
+
+    // ⚖️ Rebalanceo semanal
+    if (Date.now() - Number(getMeta('arena_rebal_last') ?? 0) >= 42 * H4) {
+      rebalance(filter, prices, Date.now())
+      await safeNotify(`⚖️ <b>Rebalanceo semanal</b> <i>(dinero de mentira)</i>\nVolvió a 50% USDT y 50% repartido entre ${filter.length} monedas.`)
+    }
     for (const strategy of COMPETITOR_KEYS) {
       for (const symbol of filter) {
         const d = data.get(symbol)
@@ -386,22 +424,18 @@ export async function runBot() {
         const size = Math.min(portfolioValue(strategy, prices) / SLOTS, getCash(strategy))
         if (size < MIN_ORDER) continue
         setCash(strategy, getCash(strategy) - size)
-        db()
-          .prepare(
-            'INSERT INTO arena_positions (strategy, symbol, entry, qty, size, sl, tp, max_until, note, entry_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          )
-          .run(
-            strategy,
-            symbol,
-            entry,
-            (size * (1 - FEE)) / entry,
-            size,
-            levels.sl,
-            Number.isFinite(levels.tp) ? levels.tp : null,
-            plan.maxBars ? Date.now() + plan.maxBars * H4 : null,
-            plan.note,
-            Date.now(),
-          )
+        insertPosition(strategy, {
+          symbol,
+          entry,
+          qty: (size * (1 - FEE)) / entry,
+          size,
+          sl: levels.sl,
+          tp: Number.isFinite(levels.tp) ? levels.tp : null,
+          max_until: plan.maxBars ? Date.now() + plan.maxBars * H4 : null,
+          exit_rule: plan.exitRule ?? null,
+          note: plan.note,
+          entry_time: Date.now(),
+        })
         await safeNotify(
           `🛒 <b>${tag(strategy)} compró ${esc(coinOf(symbol))}</b> <i>(dinero de mentira)</i>\n` +
             `${size.toFixed(2)} USDT a ${px(entry)}\n` +
@@ -421,6 +455,52 @@ export async function runBot() {
   } finally {
     running = false
   }
+}
+
+function insertPosition(strategy: Competitor, p: SimPosition) {
+  db()
+    .prepare(
+      'INSERT OR REPLACE INTO arena_positions (strategy, symbol, entry, qty, size, sl, tp, max_until, exit_rule, note, entry_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    )
+    .run(strategy, p.symbol, p.entry, p.qty, p.size, p.sl, p.tp, p.max_until, p.exit_rule, p.note, p.entry_time)
+}
+
+// ===== ⚖️ Rebalanceo: 50% USDT, 50% repartido en partes iguales entre las monedas =====
+
+function rebalTargets(symbols: string[], total: number) {
+  const each = symbols.length ? total / 2 / symbols.length : 0
+  return new Map(symbols.map((s) => [s, each]))
+}
+
+/** Lleva cada moneda a su valor objetivo (comprando o vendiendo, con comisión) y devuelve el USDT que queda */
+function applyRebalance(open: Map<string, SimPosition>, target: Map<string, number>, prices: Map<string, number>, cash: number, time: number) {
+  for (const [s, p] of open) if (!target.has(s) && prices.has(s)) {
+    cash += p.qty * prices.get(s)! * (1 - FEE) // monedas que salieron del filtro: se venden
+    open.delete(s)
+  }
+  for (const [s, value] of target) {
+    const price = prices.get(s)
+    if (!price) continue
+    const p = open.get(s)
+    const now = (p?.qty ?? 0) * price
+    const diff = value - now
+    if (Math.abs(diff) < 1) continue // no vale la pena mover menos de 1 USDT
+    const qty = (p?.qty ?? 0) + (diff > 0 ? (diff * (1 - FEE)) / price : diff / price)
+    cash += diff > 0 ? -diff : -diff * (1 - FEE)
+    open.set(s, { symbol: s, entry: price, qty, size: qty * price, sl: 0, tp: null, max_until: null, exit_rule: null, note: 'Rebalanceo semanal 50/50', entry_time: time })
+  }
+  return cash
+}
+
+/** Rebalanceo en vivo (guarda en la base de datos) */
+function rebalance(symbols: string[], prices: Map<string, number>, time: number) {
+  const open = new Map(listPositions('rebal').map((p) => [p.symbol, p as SimPosition]))
+  const total = getCash('rebal') + [...open].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+  const cash = applyRebalance(open, rebalTargets(symbols.filter((s) => prices.has(s)), total), prices, getCash('rebal'), time)
+  db().prepare('DELETE FROM arena_positions WHERE strategy = ?').run('rebal')
+  for (const p of open.values()) insertPosition('rebal', p)
+  setCash('rebal', cash)
+  setMeta('arena_rebal_last', String(time))
 }
 
 /** Una foto por hora de cuánto vale cada cartera y la de "no tocar" */

@@ -4,11 +4,11 @@
 // eso sería trampa), cobra 0,1% de comisión por lado y, si en una vela se tocan la ganancia y
 // la pérdida, cuenta la pérdida (somos pesimistas a propósito).
 import type { Bar } from './binance'
-import { fibSignal, pocSignal, smcSignal, type EntryPlan } from './signals'
+import { bollSignal, exitBy, fibSignal, goldenSignal, pocSignal, rsiSignal, smcSignal, turtleSignal, type EntryPlan } from './signals'
 
 export const FEE = 0.001 // 0,1% por operación, como Binance
 
-export type Strategy = 'bounce' | 'trend' | 'dca' | 'dip' | 'poc' | 'fib' | 'smc'
+export type Strategy = 'bounce' | 'trend' | 'dca' | 'dip' | 'poc' | 'fib' | 'smc' | 'rsi' | 'boll' | 'turtle' | 'golden' | 'rebal'
 export type BtInterval = '4h' | '1d'
 
 export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short: string; how: string[] }> = {
@@ -72,6 +72,56 @@ export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short:
       'Stop loss debajo del order block; vende cuando gana el doble de lo que arriesgó (2:1).',
     ],
   },
+  rsi: {
+    emoji: '📉',
+    label: 'RSI (sobrevendido)',
+    short: 'RSI',
+    how: [
+      'El RSI va de 0 a 100: debajo de 30 se dice que está "sobrevendido" (bajó demasiado).',
+      'Compra cuando el RSI estaba debajo de 30 y vuelve a subir de 30.',
+      'Vende cuando el RSI pasa de 70 ("sobrecomprado"), con stop loss de −8% o a los ~10 días.',
+    ],
+  },
+  boll: {
+    emoji: '〰️',
+    label: 'Bandas de Bollinger',
+    short: 'Bollinger',
+    how: [
+      'Una franja alrededor del promedio de 20 velas, que se ensancha cuando el precio se mueve mucho.',
+      'Compra cuando el precio cerró debajo de la banda de abajo y vuelve a entrar.',
+      'Vende al llegar a la línea del medio, con stop loss de −5% o a los ~5 días.',
+    ],
+  },
+  turtle: {
+    emoji: '🐢',
+    label: 'Ruptura de las Tortugas',
+    short: 'Tortugas',
+    how: [
+      'La estrategia de los famosos "Turtle traders" de los años 80.',
+      'Compra cuando el precio cierra arriba del máximo de las últimas 20 velas.',
+      'Vende cuando cierra debajo del mínimo de las últimas 10 velas, o con stop loss de −8%.',
+    ],
+  },
+  golden: {
+    emoji: '✨',
+    label: 'Golden cross 50/200',
+    short: 'Golden',
+    how: [
+      'Como "seguir la tendencia", pero con promedios más lentos: 50 y 200 velas.',
+      'Compra cuando la media de 50 cruza hacia arriba a la de 200 (golden cross).',
+      'Vende en el cruce contrario (death cross), o con stop loss de −10%.',
+    ],
+  },
+  rebal: {
+    emoji: '⚖️',
+    label: 'Rebalanceo 50/50',
+    short: 'Rebalanceo',
+    how: [
+      'Tiene siempre la mitad en la moneda y la mitad en USDT.',
+      'Cada semana vuelve al 50/50: si la moneda subió, vende un poco; si bajó, compra un poco.',
+      'Nunca adivina: vende caro y compra barato de forma automática.',
+    ],
+  },
   dca: {
     emoji: '🗓️',
     label: 'Compra semanal',
@@ -101,7 +151,7 @@ export function defaultParams(strategy: Strategy, interval: BtInterval): Params 
   return { tp: 5, sl: 3, maxBars: interval === '4h' ? 42 : 10, dip: 0, stake: 100 }
 }
 
-export type ExitReason = 'tp' | 'sl' | 'time' | 'cross' | 'open' // open = sigue comprado al final
+export type ExitReason = 'tp' | 'sl' | 'time' | 'cross' | 'open' | 'rule' // open = sigue comprado al final · rule = su regla de salida
 
 export type Trade = {
   entryTime: number // ms
@@ -166,6 +216,7 @@ export function lines(bars: Bar[]): Lines {
 
 export function runStrategy(bars: Bar[], strategy: Strategy, p: Params, interval: BtInterval): Result {
   if (strategy === 'dca') return runDca(bars, p, interval)
+  if (strategy === 'rebal') return runRebalance(bars, p, interval)
   const trades =
     strategy === 'trend'
       ? tradeTrend(bars, p)
@@ -251,7 +302,7 @@ export function tradeTrend(bars: Bar[], p: Params, from = START, to = bars.lengt
 
 // ===== POC, Fibonacci y Smart Money: cada señal trae su propio plan (stop, objetivo, tiempo) =====
 
-export const PLANNED = { poc: pocSignal, fib: fibSignal, smc: smcSignal } as const
+export const PLANNED = { poc: pocSignal, fib: fibSignal, smc: smcSignal, rsi: rsiSignal, boll: bollSignal, turtle: turtleSignal, golden: goldenSignal } as const
 export type PlannedStrategy = keyof typeof PLANNED
 
 /** Convierte el plan en precios concretos con la compra real. null si el plan no tiene sentido (stop arriba de la compra, etc.) */
@@ -276,6 +327,7 @@ export function tradePlanned(bars: Bar[], signal: (bars: Bar[], i: number) => En
       const b = bars[j]
       if (prices.sl && b.low <= prices.sl) exit = { idx: j, price: Math.min(prices.sl, b.open), reason: 'sl' }
       else if (b.high >= prices.tp) exit = { idx: j, price: Math.max(prices.tp, b.open), reason: 'tp' }
+      else if (plan.exitRule && j > entryIdx && exitBy(plan.exitRule, bars, j)) exit = { idx: j, price: b.close, reason: 'rule' }
       else if (plan.maxBars && j - entryIdx + 1 >= plan.maxBars) exit = { idx: j, price: b.close, reason: 'time' }
     }
     if (!exit) break // la última operación todavía estaría abierta: no la contamos
@@ -314,6 +366,41 @@ export function tradeDip(bars: Bar[], p: Params): Trade[] {
     i = exit.idx
   }
   return trades
+}
+
+// ===== Rebalanceo 50/50 =====
+
+/** Mitad moneda, mitad USDT; cada semana vuelve al 50/50 (pagando comisión por lo que compra o vende) */
+function runRebalance(bars: Bar[], p: Params, interval: BtInterval): Result {
+  const step = interval === '4h' ? 42 : 7
+  const first = bars[START]
+  let qty = ((p.stake / 2) * (1 - FEE)) / first.open
+  let cash = p.stake / 2
+  let peak = 0
+  let maxDrawdown = 0
+  const equity: Result['equity'] = []
+  for (let i = START; i < bars.length; i++) {
+    const price = bars[i].close
+    if ((i - START) % step === 0 && i > START) {
+      const target = (cash + qty * price) / 2
+      const diff = target - qty * price // >0 compra, <0 vende
+      if (diff > 0) {
+        qty += (diff * (1 - FEE)) / price
+        cash -= diff
+      } else {
+        qty += diff / price
+        cash += -diff * (1 - FEE)
+      }
+    }
+    if ((i - START) % 6 === 0 || i === bars.length - 1) {
+      const value = cash + qty * price - p.stake
+      equity.push({ time: bars[i].time * 1000, value })
+      peak = Math.max(peak, value)
+      maxDrawdown = Math.max(maxDrawdown, peak - value)
+    }
+  }
+  const total = cash + qty * bars[bars.length - 1].close * (1 - FEE) - p.stake
+  return { strategy: 'rebal', trades: [], stats: { ...emptyStats(bars), trades: equity.length, total, maxDrawdown }, equity }
 }
 
 // ===== Compra semanal =====

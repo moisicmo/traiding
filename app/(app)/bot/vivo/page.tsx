@@ -4,6 +4,7 @@ import { fmt } from '@/lib/binance'
 import { getMeta } from '@/lib/db'
 import { COLORS } from '@/lib/colors'
 import {
+  boliviaDay,
   COMPETITOR_KEYS,
   COMPETITORS,
   daysRunning,
@@ -20,6 +21,7 @@ import {
   listTrades,
   portfolioValue,
   REASONS,
+  tradeCounts,
   SLOTS,
   type Competitor,
 } from '@/lib/paper-bot'
@@ -44,6 +46,11 @@ const COLOR: Record<Competitor | 'hold', string> = {
   poc: '#b98bff',
   fib: '#ff9f43',
   smc: '#ff6fae',
+  rsi: '#2ec4b6',
+  boll: '#ffd23f',
+  turtle: '#8bd450',
+  golden: '#c49a6c',
+  rebal: '#5ad1ff',
   hold: COLORS.muted,
 }
 const NAME = (k: Competitor | 'hold') => (k === 'hold' ? `${HOLD.emoji} ${HOLD.label}` : `${COMPETITORS[k].emoji} ${COMPETITORS[k].label}`)
@@ -79,7 +86,7 @@ export default async function VivoPage() {
               Capital ficticio de cada uno (USDT)
               <input name="capital" inputMode="decimal" defaultValue={200} className="input tabular mt-1" />
             </label>
-            <MonthsSelect />
+            <FromDate />
             <button className="rounded-lg bg-up px-6 py-2.5 font-semibold text-white active:opacity-80">🏁 Empezar la competencia</button>
           </form>
         </section>
@@ -89,8 +96,9 @@ export default async function VivoPage() {
   const prices = await getPrices()
   const running = isRunning()
   const capital = getCapital()
-  const positions = listPositions()
+  const positions = listPositions().filter((p) => p.strategy !== 'rebal') // el rebalanceo tiene un poco de todas: se resume en la tabla
   const trades = listTrades()
+  const counts = tradeCounts()
   const equity = listEquity()
   const days = daysRunning(started)
   const liveSince = getLiveSince()
@@ -101,13 +109,13 @@ export default async function VivoPage() {
   // Tabla de posiciones
   const board = [
     ...COMPETITOR_KEYS.map((k) => {
-      const mine = trades.filter((t) => t.strategy === k)
+      const c = counts.get(k) ?? { closed: 0, wins: 0 }
       return {
         key: k as Competitor | 'hold',
         value: portfolioValue(k, prices),
-        closed: mine.length,
-        wins: mine.filter((t) => t.pnl > 0).length,
-        open: positions.filter((p) => p.strategy === k).length,
+        closed: c.closed,
+        wins: c.wins,
+        open: listPositions(k).length,
         cash: getCash(k),
       }
     }),
@@ -154,7 +162,9 @@ export default async function VivoPage() {
                 <span className="w-full text-xs text-muted sm:w-56 sm:text-right">
                   {r.closed === null
                     ? 'compró todo el primer día'
-                    : `${r.closed} cerradas · ${r.wins} ganadas · ${r.open}/${SLOTS} abiertas · ${r.cash!.toFixed(0)} libres`}
+                    : r.key === 'rebal'
+                      ? `${r.cash!.toFixed(0)} en USDT · resto en ${r.open} monedas · se reacomoda cada semana`
+                      : `${r.closed} cerradas · ${r.wins} ganadas · ${r.open}/${SLOTS} abiertas · ${r.cash!.toFixed(0)} libres`}
                 </span>
               </li>
             )
@@ -222,7 +232,7 @@ export default async function VivoPage() {
         )}
       </Card>
 
-      <Card title={`Operaciones cerradas (${trades.length})`} subtitle="De la más nueva a la más vieja" className="mt-4">
+      <Card title={`Operaciones cerradas (${[...counts.values()].reduce((s, c) => s + c.closed, 0)})`} subtitle="Las 200 más nuevas" className="mt-4">
         {trades.length ? (
           <ul className="space-y-2">
             {trades.map((t) => (
@@ -267,7 +277,7 @@ export default async function VivoPage() {
               Capital ficticio de cada uno (USDT)
               <input name="capital" inputMode="decimal" defaultValue={capital} className="input tabular mt-1" />
             </label>
-            <MonthsSelect />
+            <FromDate />
             <button className="rounded-lg border border-down/50 px-6 py-2.5 font-semibold text-down">Borrar todo y empezar de nuevo</button>
           </form>
         </div>
@@ -276,18 +286,14 @@ export default async function VivoPage() {
   )
 }
 
-/** Desde cuándo empieza la competencia: con meses, simula ese pasado y después sigue en vivo */
-function MonthsSelect() {
+/** Desde cuándo empieza la competencia: una fecha del pasado simula desde ahí y después sigue en vivo */
+function FromDate() {
+  const day = boliviaDay
   return (
     <label className="block text-sm text-muted sm:w-64">
-      Empezar desde
-      <select name="months" defaultValue="3" className="input mt-1">
-        <option value="0">Hoy (solo en vivo)</option>
-        <option value="1">Hace 1 mes (simula y sigue en vivo)</option>
-        <option value="2">Hace 2 meses (simula y sigue en vivo)</option>
-        <option value="3">Hace 3 meses (simula y sigue en vivo)</option>
-        <option value="6">Hace 6 meses (simula y sigue en vivo)</option>
-      </select>
+      Empezar desde (fecha)
+      <input type="date" name="from" defaultValue={day(-91)} min={day(-365)} max={day(0)} className="input mt-1" />
+      <span className="mt-1 block text-xs">Simula desde esa fecha y sigue en vivo. Hoy = solo en vivo. Máximo 1 año.</span>
     </label>
   )
 }

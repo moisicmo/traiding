@@ -27,7 +27,7 @@ const median = (list: number[]) => {
   return sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2
 }
 
-const REASON: Record<Trade['reason'], string> = { tp: 'Llegó a la ganancia', sl: 'Stop loss', time: 'Tiempo', cross: 'Terminó la subida', open: 'Sigue comprado (precio de hoy)' }
+const REASON: Record<Trade['reason'], string> = { tp: 'Llegó a la ganancia', sl: 'Stop loss', time: 'Tiempo', cross: 'Terminó la subida', open: 'Sigue comprado (precio de hoy)', rule: 'Su regla de venta' }
 
 type Search = { s?: string; i?: string; st?: string; tp?: string; sl?: string; max?: string; dip?: string }
 
@@ -54,7 +54,7 @@ function readParams(q: Search) {
 /** El veredicto en palabras: ¿sirve esta estrategia en esta moneda? */
 function verdict(r: Result) {
   const { total, buyHold, trades } = r.stats
-  if (r.strategy !== 'dca' && trades < 5) return { icon: '🤷', text: 'Muy pocas operaciones para sacar conclusiones', className: 'border-border text-muted' }
+  if (r.strategy !== 'dca' && r.strategy !== 'rebal' && trades < 5) return { icon: '🤷', text: 'Muy pocas operaciones para sacar conclusiones', className: 'border-border text-muted' }
   if (total <= 0) return { icon: '❌', text: 'Perdió plata', className: 'border-down/40 bg-down/10 text-down' }
   if (total < buyHold) return { icon: '⚠️', text: 'Ganó, pero menos que comprar y no tocar', className: 'border-sma20/40 bg-sma20/10 text-sma20' }
   return { icon: '✅', text: 'Ganó más que comprar y no tocar', className: 'border-up/40 bg-up/10 text-up' }
@@ -150,7 +150,7 @@ async function OneCoin({
   const compare = ALL_STRATEGIES.map((s) => runStrategy(bars, s, defaultParams(s, interval), interval))
   const s = result.stats
   const v = verdict(result)
-  const isDca = strategy === 'dca'
+  const isDca = strategy === 'dca' || strategy === 'rebal'
 
   return (
     <>
@@ -171,13 +171,18 @@ async function OneCoin({
           <p className={clsx('text-3xl font-semibold', tone(s.total))}>
             {money(s.total)} <span className="text-base font-normal text-muted">USDT</span>
           </p>
-          <p className="text-xs text-muted">{isDca ? 'con 100 USDT repartidos en compras semanales' : 'usando 100 USDT por operación'}</p>
+          <p className="text-xs text-muted">{strategy === 'rebal' ? 'con 100 USDT, mitad moneda y mitad USDT' : isDca ? 'con 100 USDT repartidos en compras semanales' : 'usando 100 USDT por operación'}</p>
         </Tile>
         <Tile label="Comprar y no tocar">
           <p className={clsx('text-2xl font-semibold', tone(s.buyHold))}>{money(s.buyHold)}</p>
           <p className="text-xs text-muted">USDT con 100 al inicio</p>
         </Tile>
-        {isDca ? (
+        {strategy === 'rebal' ? (
+          <Tile label="Rebalanceos">
+            <p className="text-2xl font-semibold">1 por semana</p>
+            <p className="text-xs text-muted">vuelve al 50/50 cada semana</p>
+          </Tile>
+        ) : isDca ? (
           <Tile label="Compras">
             <p className="text-2xl font-semibold">{s.trades}</p>
             <p className="text-xs text-muted">de {(100 / s.trades).toFixed(2)} USDT, una por semana</p>

@@ -63,7 +63,7 @@ export function BotForm({ coins, symbol, interval, strategy: initial, params }: 
             <input key={`tp-${strategy}`} name="tp" inputMode="decimal" defaultValue={p.tp} className="input tabular" />
           </Field>
         )}
-        {strategy !== 'dca' && (
+        {(strategy === 'bounce' || strategy === 'trend' || strategy === 'dip') && (
           <Field label={strategy === 'dip' ? 'Stop loss % (0 = sin)' : 'Stop loss %'}>
             <input key={`sl-${strategy}`} name="sl" inputMode="decimal" defaultValue={p.sl} className="input tabular" />
           </Field>

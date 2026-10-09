@@ -4,11 +4,11 @@
 // eso sería trampa), cobra 0,1% de comisión por lado y, si en una vela se tocan la ganancia y
 // la pérdida, cuenta la pérdida (somos pesimistas a propósito).
 import type { Bar } from './binance'
-import { bollSignal, exitBy, fibSignal, goldenSignal, pocSignal, rsiSignal, smcSignal, trendPlusSignal, turtleSignal, type EntryPlan } from './signals'
+import { bollSignal, exitBy, fibSignal, goldenSignal, hybridSignal, pocSignal, rsiSignal, smcSignal, trendPlusSignal, turtleSignal, type EntryPlan } from './signals'
 
 export const FEE = 0.001 // 0,1% por operación, como Binance
 
-export type Strategy = 'bounce' | 'trend' | 'trendplus' | 'dca' | 'dip' | 'poc' | 'fib' | 'smc' | 'rsi' | 'boll' | 'turtle' | 'golden' | 'rebal'
+export type Strategy = 'bounce' | 'trend' | 'trendplus' | 'dca' | 'dip' | 'poc' | 'fib' | 'smc' | 'rsi' | 'boll' | 'turtle' | 'hybrid' | 'half' | 'golden' | 'rebal'
 export type BtInterval = '4h' | '1d'
 
 export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short: string; how: string[] }> = {
@@ -110,6 +110,26 @@ export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short:
       'La estrategia de los famosos "Turtle traders" de los años 80.',
       'Compra cuando el precio cierra arriba del máximo de las últimas 20 velas.',
       'Vende cuando cierra debajo del mínimo de las últimas 10 velas, o con stop loss de −8%.',
+    ],
+  },
+  hybrid: {
+    emoji: '🧬',
+    label: 'Híbrido Tortugas + Tendencia',
+    short: 'Híbrido',
+    how: [
+      'Compra solo cuando las dos están de acuerdo: el precio rompe el máximo de las últimas 20 velas (Tortugas) y la amarilla está encima de la azul (Tendencia).',
+      'Vende como las Tortugas: cuando cierra debajo del mínimo de las últimas 10 velas, o con stop loss de −8%.',
+      'Opera menos veces que cada una por separado: la idea es evitar las compras falsas.',
+    ],
+  },
+  half: {
+    emoji: '🤝',
+    label: 'Mitad Tortugas, mitad Tendencia',
+    short: 'Mitad',
+    how: [
+      'La mitad de la plata la maneja Tortugas y la otra mitad Tendencia, cada una con sus propias reglas.',
+      'No inventa nada nuevo: cuando una se equivoca, muchas veces la otra no, y las caídas se suavizan.',
+      'Cada operación usa la mitad del monto (50 de los 100 USDT).',
     ],
   },
   golden: {
@@ -227,6 +247,12 @@ export function lines(bars: Bar[]): Lines {
 export function runStrategy(bars: Bar[], strategy: Strategy, p: Params, interval: BtInterval): Result {
   if (strategy === 'dca') return runDca(bars, p, interval)
   if (strategy === 'rebal') return runRebalance(bars, p, interval)
+  if (strategy === 'half') {
+    // Dos carteras de 50: las operaciones de las dos juntas, en el orden en que se cerraron
+    const stake = p.stake / 2
+    const trades = [...tradeTrend(bars, { ...defaultParams('trend', interval), stake }), ...tradePlanned(bars, turtleSignal, stake)].sort((a, b) => a.exitTime - b.exitTime)
+    return { strategy, trades, stats: tradeStats(bars, trades), equity: tradeEquity(bars, trades) }
+  }
   const trades =
     strategy === 'trend'
       ? tradeTrend(bars, p)
@@ -313,7 +339,7 @@ export function tradeTrend(bars: Bar[], p: Params, from = START, to = bars.lengt
 
 // ===== POC, Fibonacci y Smart Money: cada señal trae su propio plan (stop, objetivo, tiempo) =====
 
-export const PLANNED = { poc: pocSignal, fib: fibSignal, smc: smcSignal, rsi: rsiSignal, boll: bollSignal, turtle: turtleSignal, golden: goldenSignal, trendplus: trendPlusSignal } as const
+export const PLANNED = { poc: pocSignal, fib: fibSignal, smc: smcSignal, rsi: rsiSignal, boll: bollSignal, turtle: turtleSignal, hybrid: hybridSignal, golden: goldenSignal, trendplus: trendPlusSignal } as const
 export type PlannedStrategy = keyof typeof PLANNED
 
 /** Convierte el plan en precios concretos con la compra real. null si el plan no tiene sentido (stop arriba de la compra, etc.) */

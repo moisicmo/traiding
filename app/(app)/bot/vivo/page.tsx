@@ -62,6 +62,8 @@ const COLOR: Record<Competitor | 'hold', string> = {
   rsi: '#2ec4b6',
   boll: '#ffd23f',
   turtle: '#8bd450',
+  hybrid: '#d4ff3a',
+  half: '#ff8a65',
   golden: '#c49a6c',
   rebal: '#5ad1ff',
   hold: COLORS.muted,
@@ -127,8 +129,8 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
   const sizing = getSizing()
   const sizingText =
     sizing.mode === 'fixed' ? `${sizing.amount} USDT por compra` : sizing.mode === 'risk' ? `cada compra arriesga ${sizing.risk}% de la cartera` : `1/4 de la cartera por compra (máx. ${maxOpen(sizing)})`
-  // El rebalanceo y Aprende v2 son copias de una cartera entera: se resumen en la tabla, no operación por operación
-  const positions = listPositions().filter((p) => p.strategy !== 'rebal' && p.strategy !== 'learn2')
+  // El rebalanceo, Aprende v2 y Mitad y mitad son copias de una cartera entera: se resumen en la tabla, no operación por operación
+  const positions = listPositions().filter((p) => p.strategy !== 'rebal' && p.strategy !== 'learn2' && p.strategy !== 'half')
   const trades = listTrades()
   const counts = tradeCounts()
   const learn = learnState()
@@ -200,6 +202,8 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
                     ? 'compró todo el primer día'
                     : r.key === 'rebal'
                       ? `${r.cash!.toFixed(0)} en USDT · resto en ${r.open} monedas · se reacomoda cada semana`
+                      : r.key === 'half'
+                        ? `copia mitad 🐢 Tortugas y mitad 📈 Tendencia · ${r.open} monedas · ${r.cash!.toFixed(0)} libres`
                       : r.key === 'learn2'
                         ? `${leader ? `copia a ${COMPETITORS[leader].emoji} ${COMPETITORS[leader].label}` : 'no copia a nadie'} · ${r.open} monedas · ${r.cash!.toFixed(0)} libres`
                       : `${r.closed} cerradas · ${r.wins} ganadas · ${r.open}${sizing.mode === 'auto' ? `/${SLOTS}` : ''} abiertas · ${r.cash!.toFixed(0)} libres`}
@@ -413,7 +417,7 @@ function Podium({
   const hold = rows.find((r) => r.k === 'hold')!
   // "Más estable" solo entre los que operaron lo suficiente (con pocas operaciones, el resultado puede ser suerte)
   const FEW = 20
-  const isFew = (r: (typeof rows)[number]) => !!r.c && r.c.closed < FEW && r.k !== 'rebal' && r.k !== 'learn2'
+  const isFew = (r: (typeof rows)[number]) => !!r.c && r.c.closed < FEW && r.k !== 'rebal' && r.k !== 'learn2' && r.k !== 'half'
   const safest = [...best].filter((r) => !isFew(r)).sort((a, b) => b.m.ratio - a.m.ratio)[0]
 
   return (

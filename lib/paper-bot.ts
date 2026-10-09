@@ -55,9 +55,12 @@ export const COMPETITORS = {
   rsi: { emoji: '📉', label: 'RSI', how: 'Compra cuando el RSI sale de sobrevendido (vuelve a subir de 30); vende cuando pasa de 70, stop −8%' },
   boll: { emoji: '〰️', label: 'Bollinger', how: 'Compra cuando el precio vuelve a entrar por la banda de abajo; vende en la línea del medio, stop −5%' },
   turtle: { emoji: '🐢', label: 'Tortugas', how: 'Compra al romper el máximo de 20 velas; vende al perder el mínimo de 10 velas, stop −8%' },
+  hybrid: { emoji: '🧬', label: 'Híbrido', how: 'Compra solo cuando Tortugas y Tendencia están de acuerdo (rompe el máximo de 20 velas Y la amarilla está encima de la azul); vende como Tortugas, stop −8%' },
   golden: { emoji: '✨', label: 'Golden cross', how: 'Compra cuando la media de 50 cruza hacia arriba a la de 200; vende en el cruce contrario, stop −10%' },
   rebal: { emoji: '⚖️', label: 'Rebalanceo', how: 'Mitad en USDT y mitad repartida entre las monedas; cada semana vuelve al 50/50' },
-  // Va último a propósito: en cada vela copia la cartera del líder DESPUÉS de que el líder compró y vendió
+  // Van al final a propósito: copian carteras de otros DESPUÉS de que esos otros compraron y vendieron en la vela
+  half: { emoji: '🤝', label: 'Mitad y mitad', how: 'La mitad de la plata copia la cartera de Tortugas y la otra mitad la de Tendencia' },
+  // Último de todos: en cada vela copia la cartera del líder DESPUÉS de que el líder compró y vendió
   learn2: { emoji: '🪞', label: 'Aprende v2', how: 'Cada día elige al mejor de los últimos 30 días y copia su cartera completa (lo que ya tiene comprado, en la misma proporción)' },
 } as const
 export type Competitor = keyof typeof COMPETITORS
@@ -313,6 +316,14 @@ async function replay(symbols: string[], capital: number, from: number): Promise
     }
 
     for (const k of COMPETITOR_KEYS) {
+      if (k === 'half') {
+        const myTotal = cash.half + [...open.half].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+        cash.half = applyMirror(open.half, halfTargets((x) => [open[x].values(), cash[x]], prices, myTotal), prices, cash.half, t + H4, HALF_NOTE)
+        const value = cash.half + [...open.half].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+        equity.push({ ts: t + H4, strategy: k, value })
+        hist[k].push(value)
+        continue
+      }
       if (k === 'learn2') {
         // Copia la cartera del líder (ya actualizada en esta vela) al precio de cierre
         const myTotal = cash.learn2 + [...open.learn2].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
@@ -462,7 +473,7 @@ async function safeNotify(html: string) {
 
 /** La señal de cada competidor en la vela i (por defecto, la última cerrada). null = no compra */
 function signalFor(s: Competitor, bars: Bar[], i = bars.length - 1): EntryPlan | null {
-  if (s === 'rebal' || s === 'learn' || s === 'learn2') return null // no tienen señal propia: uno se reacomoda cada semana, el otro copia a los mejores
+  if (s === 'rebal' || s === 'learn' || s === 'learn2' || s === 'half') return null // no tienen señal propia: se reacomodan o copian a otros
   if (s === 'trend') return trendSignal(bars, i) ? { slPct: STOP_LOSS, note: 'La amarilla cruzó hacia arriba a la azul: empieza una subida' } : null
   return PLANNED[s](bars, i)
 }
@@ -569,7 +580,7 @@ export async function runBot() {
     }
     setMeta('arena_seen', JSON.stringify(seen))
 
-    // 🪞 Aprende v2: se iguala a la cartera del líder (después de que el líder compró y vendió)
+    // 🪞 Aprende v2 y 🤝 Mitad y mitad: se igualan a las carteras que copian (después de que esas compraron y vendieron)
     mirrorLive(prices)
 
     snapshot(await getPrices())
@@ -587,7 +598,7 @@ export async function runBot() {
 
 export const LEARN_BARS = 84 // 14 días de velas de 4 h
 const LEARN_TOP = 3
-const LEARN_FROM: Competitor[] = COMPETITOR_KEYS.filter((k) => k !== 'learn' && k !== 'learn2' && k !== 'rebal')
+const LEARN_FROM: Competitor[] = COMPETITOR_KEYS.filter((k) => k !== 'learn' && k !== 'learn2' && k !== 'rebal' && k !== 'half')
 export const LEARN2_BARS = 180 // 30 días de velas de 4 h
 const MIRROR_TOLERANCE = 0.25 // solo ajusta una moneda si se desvía más de 25% de lo que debería tener
 export type LearnLog = { ts: number; follow: Competitor[] }
@@ -717,15 +728,36 @@ function applyRebalance(open: Map<string, SimPosition>, target: Map<string, numb
   return cash
 }
 
+/** 🤝 Mitad y mitad: lo que debería tener de cada moneda = la mitad copiada de Tortugas + la mitad de Tendencia */
+const HALF_FROM: Competitor[] = ['turtle', 'trend']
+const HALF_NOTE = 'Mitad copiada de 🐢 Tortugas y mitad de 📈 Tendencia'
+function halfTargets(
+  of: (k: Competitor) => [Iterable<{ symbol: string; qty: number; entry: number }>, number],
+  prices: Map<string, number>,
+  myTotal: number,
+) {
+  const target = new Map<string, number>()
+  for (const k of HALF_FROM) {
+    const [open, cash] = of(k)
+    for (const [s, v] of mirrorTargets(open, cash, prices, myTotal / HALF_FROM.length)) target.set(s, (target.get(s) ?? 0) + v)
+  }
+  return target
+}
+
+/** En vivo: Aprende v2 y Mitad y mitad se igualan a las carteras que copian */
 function mirrorLive(prices: Map<string, number>) {
   const leader = learn2Leader()
-  const open = new Map(listPositions('learn2').map((p) => [p.symbol, p as SimPosition]))
-  const myTotal = getCash('learn2') + [...open].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
-  const target = leader ? mirrorTargets(listPositions(leader), getCash(leader), prices, myTotal) : new Map<string, number>()
-  const cash = applyMirror(open, target, prices, getCash('learn2'), Date.now(), leader ? `Copia la cartera de ${tag(leader)}` : '')
-  db().prepare('DELETE FROM arena_positions WHERE strategy = ?').run('learn2')
-  for (const p of open.values()) insertPosition('learn2', p)
-  setCash('learn2', cash)
+  syncMirror('learn2', prices, (total) => (leader ? mirrorTargets(listPositions(leader), getCash(leader), prices, total) : new Map()), leader ? `Copia la cartera de ${tag(leader)}` : '')
+  syncMirror('half', prices, (total) => halfTargets((k) => [listPositions(k), getCash(k)], prices, total), HALF_NOTE)
+}
+
+function syncMirror(k: Competitor, prices: Map<string, number>, targetFor: (total: number) => Map<string, number>, note: string) {
+  const open = new Map(listPositions(k).map((p) => [p.symbol, p as SimPosition]))
+  const myTotal = getCash(k) + [...open].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+  const cash = applyMirror(open, targetFor(myTotal), prices, getCash(k), Date.now(), note)
+  db().prepare('DELETE FROM arena_positions WHERE strategy = ?').run(k)
+  for (const p of open.values()) insertPosition(k, p)
+  setCash(k, cash)
 }
 
 /** Rebalanceo en vivo (guarda en la base de datos) */

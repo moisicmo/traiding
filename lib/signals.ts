@@ -208,6 +208,16 @@ export function turtleSignal(bars: Bar[], i: number): EntryPlan | null {
   return { slPct: 8, exitRule: 'turtle10', note: `Rompió el máximo de las últimas 20 velas (${px(prevHigh)})` }
 }
 
+// ===== 🐢📈 Híbrido: Tortugas + Tendencia =====
+// Compra solo cuando las dos están de acuerdo: el precio rompe el máximo de 20 velas (Tortugas)
+// Y la amarilla (media de 20) está encima de la azul (media de 50) (Tendencia). Sale como las Tortugas.
+export function hybridSignal(bars: Bar[], i: number): EntryPlan | null {
+  if (i < 60) return null
+  if (!(smaArr(bars, 20)[i] > smaArr(bars, 50)[i])) return null
+  const plan = turtleSignal(bars, i)
+  return plan && { ...plan, note: `${plan.note}, con la amarilla encima de la azul (subida confirmada)` }
+}
+
 // ===== ✨ Golden cross 50/200 =====
 // Compra cuando la media de 50 velas cruza hacia arriba a la de 200 (la versión lenta de "tendencia"). Vende en el cruce contrario.
 export function goldenSignal(bars: Bar[], i: number): EntryPlan | null {

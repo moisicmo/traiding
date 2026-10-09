@@ -411,7 +411,10 @@ function Podium({
     .sort((a, b) => b.m.gain - a.m.gain)
   const best = rows.filter((r) => r.k !== 'hold').slice(0, top)
   const hold = rows.find((r) => r.k === 'hold')!
-  const safest = [...best].sort((a, b) => b.m.ratio - a.m.ratio)[0]
+  // "Más estable" solo entre los que operaron lo suficiente (con pocas operaciones, el resultado puede ser suerte)
+  const FEW = 20
+  const isFew = (r: (typeof rows)[number]) => !!r.c && r.c.closed < FEW && r.k !== 'rebal' && r.k !== 'learn2'
+  const safest = [...best].filter((r) => !isFew(r)).sort((a, b) => b.m.ratio - a.m.ratio)[0]
 
   return (
     <Card title={`🏆 Podio: los ${top} mejores`} subtitle="Solo los que más ganaron, comparados con no tocar. Para elegir, mira también cuánto llegaron a caer." className="mt-4">
@@ -463,7 +466,14 @@ function Podium({
                 <td className={clsx('py-2 text-right', tone(r.m.monthly))}>{pctText(r.m.monthly)}</td>
                 <td className="py-2 text-right text-down">{pctText(r.m.maxDrawdown)}</td>
                 <td className="py-2 text-right">{Number.isFinite(r.m.ratio) ? r.m.ratio.toFixed(2) : '—'}</td>
-                <td className="py-2 text-right">{r.c ? r.c.closed : '—'}</td>
+                <td className="py-2 text-right">
+                  {r.c ? r.c.closed : '—'}
+                  {isFew(r) && (
+                    <span className="ml-1.5 rounded bg-sma20/15 px-1.5 py-0.5 text-xs text-sma20" title="Con tan pocas operaciones, el resultado todavía puede ser suerte">
+                      ⚠️ pocas
+                    </span>
+                  )}
+                </td>
                 <td className="py-2 text-right">{r.c && r.c.closed ? `${Math.round((r.c.wins / r.c.closed) * 100)}%` : '—'}</td>
               </tr>
             ))}
@@ -473,6 +483,7 @@ function Podium({
       <p className="mt-3 text-xs text-muted">
         <b>Cómo elegir:</b> el que más gana no siempre es el mejor para ti. Si uno llegó a caer −40% en el camino, con plata real es muy difícil
         aguantarlo sin vender. &quot;Ganancia / caída&quot; mide cuánto ganó por cada % que llegó a caer: más alto = más ganancia con menos sustos.
+        Con menos de {FEW} operaciones (⚠️ pocas), el resultado todavía puede ser suerte.
       </p>
     </Card>
   )

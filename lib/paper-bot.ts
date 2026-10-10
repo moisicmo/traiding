@@ -709,7 +709,7 @@ async function updateFollow() {
 // ===== 🪞 Aprende v2: copia la cartera completa del líder =====
 
 /** Cuánto debería tener de cada moneda para quedar igual que el líder (en proporción a su propio valor) */
-function mirrorTargets(leaderOpen: Iterable<{ symbol: string; qty: number; entry: number }>, leaderCash: number, prices: Map<string, number>, myTotal: number) {
+export function mirrorTargets(leaderOpen: Iterable<{ symbol: string; qty: number; entry: number }>, leaderCash: number, prices: Map<string, number>, myTotal: number) {
   const holdings = [...leaderOpen].map((p) => ({ s: p.symbol, v: p.qty * (prices.get(p.symbol) ?? p.entry) }))
   const leaderTotal = leaderCash + holdings.reduce((sum, h) => sum + h.v, 0)
   return new Map(holdings.filter((h) => prices.has(h.s)).map((h) => [h.s, leaderTotal > 0 ? (h.v / leaderTotal) * myTotal : 0]))

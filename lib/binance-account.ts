@@ -24,38 +24,45 @@ export function explainError(e: unknown): string {
   return `Binance: ${e.message}`
 }
 
-// Binance exige que la hora de cada pedido coincida con la suya (±10 s): guardamos la diferencia
-let timeOffset = 0
-let timeSyncedAt = 0
+// Binance exige que la hora de cada pedido coincida con la suya (±10 s): guardamos la diferencia (una por servidor)
+const clocks = new Map<string, { offset: number; syncedAt: number }>()
 
-async function syncTime() {
-  const res = await fetch(`${BASE}/api/v3/time`, { cache: 'no-store' })
+async function syncTime(base: string) {
+  const res = await fetch(`${base}/api/v3/time`, { cache: 'no-store' })
   const { serverTime } = (await res.json()) as { serverTime: number }
-  timeOffset = serverTime - Date.now()
-  timeSyncedAt = Date.now()
+  clocks.set(base, { offset: serverTime - Date.now(), syncedAt: Date.now() })
 }
 
-/** Pedido firmado con tu API secret (HMAC SHA256), como lo pide Binance */
-async function signed<T>(method: 'GET' | 'POST', path: string, params: Record<string, string | number> = {}): Promise<T> {
-  if (!hasBinanceKeys()) throw new BinanceError('Faltan BINANCE_API_KEY y BINANCE_API_SECRET en el .env')
-  if (Date.now() - timeSyncedAt > 10 * 60_000) await syncTime()
+export type Keys = { base: string; key?: string; secret?: string }
+
+/** Pedido firmado con el API secret (HMAC SHA256), como lo pide Binance */
+export async function signedWith<T>(keys: Keys, method: 'GET' | 'POST', path: string, params: Record<string, string | number> = {}): Promise<T> {
+  if (!keys.key || !keys.secret) throw new BinanceError('Falta la API key o el secret en el .env')
+  const clock = clocks.get(keys.base)
+  if (!clock || Date.now() - clock.syncedAt > 10 * 60_000) await syncTime(keys.base)
 
   const query = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))
   query.set('recvWindow', '10000')
-  query.set('timestamp', String(Date.now() + timeOffset))
-  query.set('signature', crypto.createHmac('sha256', process.env.BINANCE_API_SECRET!).update(query.toString()).digest('hex'))
+  query.set('timestamp', String(Date.now() + clocks.get(keys.base)!.offset))
+  query.set('signature', crypto.createHmac('sha256', keys.secret).update(query.toString()).digest('hex'))
 
-  const res = await fetch(`${BASE}${path}?${query}`, {
+  const res = await fetch(`${keys.base}${path}?${query}`, {
     method,
-    headers: { 'X-MBX-APIKEY': process.env.BINANCE_API_KEY! },
+    headers: { 'X-MBX-APIKEY': keys.key },
     cache: 'no-store',
   })
   const data = await res.json()
   if (!res.ok) {
-    if (data.code === -1021) timeSyncedAt = 0 // la próxima vez vuelve a sincronizar la hora
+    if (data.code === -1021) clocks.delete(keys.base) // la próxima vez vuelve a sincronizar la hora
     throw new BinanceError(data.msg ?? `HTTP ${res.status}`, data.code)
   }
   return data as T
+}
+
+/** Con tu llave de SOLO LECTURA */
+async function signed<T>(method: 'GET' | 'POST', path: string, params: Record<string, string | number> = {}): Promise<T> {
+  if (!hasBinanceKeys()) throw new BinanceError('Faltan BINANCE_API_KEY y BINANCE_API_SECRET en el .env')
+  return signedWith<T>({ base: BASE, key: process.env.BINANCE_API_KEY, secret: process.env.BINANCE_API_SECRET }, method, path, params)
 }
 
 // ===== Saldos =====

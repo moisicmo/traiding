@@ -7,6 +7,7 @@ import { getPrices, hasBinanceKeys } from './binance-account'
 import { computeResults } from './trades'
 import { checkGoals } from './goals'
 import { runBot } from './paper-bot'
+import { runReal } from './real-bot'
 
 const EVERY_MINUTE = 60_000
 const EVERY_5_MINUTES = 5 * 60_000
@@ -40,8 +41,13 @@ export function startJobs() {
   }, EVERY_5_MINUTES)
 
   // Bot en vivo con dinero de mentira: revisa cada 5 minutos (las velas son de 4 h; el stop loss se vigila más seguido)
-  setTimeout(runBot, 20_000)
-  setInterval(runBot, EVERY_5_MINUTES)
+  // Y justo después, el bot real (si lo prendiste) copia la cartera del competidor que elegiste
+  const bots = async () => {
+    await runBot()
+    await runReal()
+  }
+  setTimeout(bots, 20_000)
+  setInterval(bots, EVERY_5_MINUTES)
 
   console.log('[jobs] Órdenes cada minuto · P2P, metas y bot cada 5 minutos')
 }

@@ -9,7 +9,7 @@
 // Nunca toca tu cuenta real de Binance: solo lee precios públicos.
 import 'server-only'
 import { REST, toBar, type Bar } from './binance'
-import { above, defaultParams, FEE, planPrices, PLANNED, trendSignal } from './backtest'
+import { above, defaultParams, FEE, planPrices, PLANNED, trendSignal, type PlannedStrategy } from './backtest'
 import { db, getMeta, setMeta } from './db'
 import { getPrices } from './binance-account'
 import { getMarket } from './market'
@@ -44,6 +44,7 @@ function positionSize(z: Sizing, value: number, cash: number, entry: number, sl:
 export const STOP_LOSS = defaultParams('trend', '4h').sl // 8%
 const MIN_ORDER = 5 // Binance no deja operar menos de 5 USDT
 const H4 = 4 * 3_600_000
+const DAY = 24 * 3_600_000
 
 export const COMPETITORS = {
   learn: { emoji: '🧠', label: 'Aprende', how: 'Cada día mira cómo le fue a cada competidor en los últimos 14 días y copia las compras de los 3 mejores (si nadie gana, espera en USDT)' },
@@ -56,15 +57,26 @@ export const COMPETITORS = {
   boll: { emoji: '〰️', label: 'Bollinger', how: 'Compra cuando el precio vuelve a entrar por la banda de abajo; vende en la línea del medio, stop −5%' },
   turtle: { emoji: '🐢', label: 'Tortugas', how: 'Compra al romper el máximo de 20 velas; vende al perder el mínimo de 10 velas, stop −8%' },
   hybrid: { emoji: '🧬', label: 'Híbrido', how: 'Compra solo cuando Tortugas y Tendencia están de acuerdo (rompe el máximo de 20 velas Y la amarilla está encima de la azul); vende como Tortugas, stop −8%' },
+  trend1d: { emoji: '📈', label: 'Tendencia (diaria)', how: 'Como Tendencia, pero con velas de 1 día: decide una vez por día (menos operaciones y menos falsas alarmas)' },
+  turtle1d: { emoji: '🐢', label: 'Tortugas (diaria)', how: 'Como Tortugas, pero con velas de 1 día: compra al romper el máximo de 20 días; vende al perder el mínimo de 10 días, stop −8%' },
   golden: { emoji: '✨', label: 'Golden cross', how: 'Compra cuando la media de 50 cruza hacia arriba a la de 200; vende en el cruce contrario, stop −10%' },
   rebal: { emoji: '⚖️', label: 'Rebalanceo', how: 'Mitad en USDT y mitad repartida entre las monedas; cada semana vuelve al 50/50' },
   // Van al final a propósito: copian carteras de otros DESPUÉS de que esos otros compraron y vendieron en la vela
   half: { emoji: '🤝', label: 'Mitad y mitad', how: 'La mitad de la plata copia la cartera de Tortugas y la otra mitad la de Tendencia' },
+  half1d: { emoji: '🤝', label: 'Mitad y mitad (diaria)', how: 'La mitad copia a Tortugas (diaria) y la otra mitad a Tendencia (diaria)' },
   // Último de todos: en cada vela copia la cartera del líder DESPUÉS de que el líder compró y vendió
   learn2: { emoji: '🪞', label: 'Aprende v2', how: 'Cada día elige al mejor de los últimos 30 días y copia su cartera completa (lo que ya tiene comprado, en la misma proporción)' },
 } as const
 export type Competitor = keyof typeof COMPETITORS
 export const COMPETITOR_KEYS = Object.keys(COMPETITORS) as Competitor[]
+/** Los que deciden con velas de 1 día (y qué reglas de 4 h usan, pero sobre velas diarias) */
+const DAILY: Partial<Record<Competitor, Competitor>> = { trend1d: 'trend', turtle1d: 'turtle' }
+const rulesOf = (k: Competitor) => DAILY[k] ?? k
+/** 🤝 Los "mitad y mitad": a quiénes copian */
+const HALVES: Partial<Record<Competitor, { from: Competitor[]; note: string }>> = {
+  half: { from: ['turtle', 'trend'], note: 'Mitad copiada de 🐢 Tortugas y mitad de 📈 Tendencia' },
+  half1d: { from: ['turtle1d', 'trend1d'], note: 'Mitad copiada de 🐢 Tortugas (diaria) y mitad de 📈 Tendencia (diaria)' },
+}
 export const HOLD = { emoji: '💤', label: 'No tocar', how: 'Reparte todo el primer día entre las monedas del filtro y espera' }
 
 export type BotPosition = {
@@ -161,6 +173,8 @@ export const getSeed = () => JSON.parse(getMeta('arena_seed') ?? '[]') as Seed[]
 const INHERIT: Partial<Record<Competitor, Pick<EntryPlan, 'slPct' | 'tpPct' | 'exitRule'>>> = {
   trend: { slPct: STOP_LOSS }, // y vende al cruce hacia abajo, como siempre
   turtle: { slPct: 8, exitRule: 'turtle10' },
+  trend1d: { slPct: STOP_LOSS },
+  turtle1d: { slPct: 8, exitRule: 'turtle10' },
   hybrid: { slPct: 8, exitRule: 'turtle10' },
   golden: { slPct: 10, exitRule: 'death' },
   trendplus: { exitRule: 'below200' },
@@ -288,12 +302,12 @@ export async function startBot(capital: number, from: number | null = null, seed
 
 // ===== Simulación del pasado (mismas reglas que en vivo) =====
 
-/** Velas de 4 h desde `from` (más 200 de antes para calcular las líneas). La última es la que se está formando. */
-async function historySince(symbol: string, from: number): Promise<Bar[]> {
+/** Velas (de 4 h o de 1 día) desde `from`, más 300 de antes para calcular las líneas. La última es la que se está formando. */
+async function historySince(symbol: string, from: number, interval: '4h' | '1d' = '4h'): Promise<Bar[]> {
   const out: Parameters<typeof toBar>[0][] = []
-  let start = from - 300 * H4
+  let start = from - 300 * (interval === '1d' ? DAY : H4)
   for (;;) {
-    const res = await fetch(`${REST}/klines?symbol=${symbol}&interval=4h&limit=1000&startTime=${start}`, { cache: 'no-store' })
+    const res = await fetch(`${REST}/klines?symbol=${symbol}&interval=${interval}&limit=1000&startTime=${start}`, { cache: 'no-store' })
     if (!res.ok) break
     const batch = (await res.json()) as Parameters<typeof toBar>[0][]
     out.push(...batch)
@@ -309,12 +323,15 @@ type SimTrade = Omit<BotTrade, 'id'>
 async function replay(symbols: string[], capital: number, from: number): Promise<string> {
   const sizing = getSizing()
   const series = new Map<string, Bar[]>()
+  const daily = new Map<string, Bar[]>() // velas de 1 día, para los competidores diarios
   for (const [k, s] of symbols.entries()) {
     progress(5 + (k / symbols.length) * 40, `Bajando el historial de ${coinOf(s)} (${k + 1} de ${symbols.length})…`)
     const bars = await historySince(s, from)
     if (bars.length > 320) series.set(s, bars)
+    daily.set(s, await historySince(s, from, '1d'))
   }
   const index = new Map([...series].map(([s, bars]) => [s, new Map(bars.map((b, i) => [b.time * 1000, i]))]))
+  const indexD = new Map([...daily].map(([s, bars]) => [s, new Map(bars.map((b, i) => [b.time * 1000, i]))]))
   const times = [...new Set([...series.values()].flatMap((bars) => bars.slice(0, -1).map((b) => b.time * 1000)))].filter((t) => t >= from).sort((a, b) => a - b)
 
   // "No tocar": compra todo al abrir la primera vela
@@ -367,10 +384,11 @@ async function replay(symbols: string[], capital: number, from: number): Promise
     }
 
     for (const k of COMPETITOR_KEYS) {
-      if (k === 'half') {
-        const myTotal = cash.half + [...open.half].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
-        cash.half = applyMirror(open.half, halfTargets((x) => [open[x].values(), cash[x]], prices, myTotal), prices, cash.half, t + H4, HALF_NOTE)
-        const value = cash.half + [...open.half].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+      const halves = HALVES[k]
+      if (halves) {
+        const myTotal = cash[k] + [...open[k]].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
+        cash[k] = applyMirror(open[k], halfTargets(halves.from, (x) => [open[x].values(), cash[x]], prices, myTotal), prices, cash[k], t + H4, halves.note)
+        const value = cash[k] + [...open[k]].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
         equity.push({ ts: t + H4, strategy: k, value })
         hist[k].push(value)
         continue
@@ -385,17 +403,28 @@ async function replay(symbols: string[], capital: number, from: number): Promise
         hist[k].push(value)
         continue
       }
-      // 1. Salidas en esta vela
+      // Los diarios deciden solo cuando cierra una vela de 1 día (la de 4 h que termina a las 00:00 UTC), con las velas diarias
+      const isDaily = k in DAILY
+      const dayOpen = t + H4 - DAY // apertura de la vela diaria que acaba de cerrar
+      const dayClosed = (t + H4) % DAY === 0
+      const decide = (s: string) => {
+        if (!isDaily) return { bars: series.get(s)!, i: index.get(s)!.get(t) }
+        if (!dayClosed) return { bars: daily.get(s)!, i: undefined }
+        return { bars: daily.get(s) ?? [], i: indexD.get(s)?.get(dayOpen) }
+      }
+      // 1. Salidas en esta vela (el stop loss y el objetivo se vigilan en cada vela de 4 h, también para los diarios)
       for (const [s, p] of open[k]) {
         const bars = series.get(s)!
         const i = index.get(s)!.get(t)
         if (i === undefined || t < p.entry_time) continue
         const b = bars[i]
+        const r = decide(s)
+        const ruleReady = r.i !== undefined && (isDaily ? dayOpen >= p.entry_time : t > p.entry_time)
         let exit: { price: number; reason: string } | null = null
         if (b.low <= p.sl) exit = { price: Math.min(p.sl, b.open), reason: 'sl' }
         else if (p.tp && b.high >= p.tp) exit = { price: Math.max(p.tp, b.open), reason: 'tp' }
-        else if ((p.source ?? k) === 'trend' && !above(bars, i)) exit = { price: b.close, reason: 'cross' }
-        else if (p.exit_rule && t > p.entry_time && exitBy(p.exit_rule, bars, i)) exit = { price: b.close, reason: 'rule' }
+        else if (rulesOf(p.source ?? k) === 'trend' && r.i !== undefined && !above(r.bars, r.i)) exit = { price: b.close, reason: 'cross' }
+        else if (p.exit_rule && ruleReady && exitBy(p.exit_rule, r.bars, r.i!)) exit = { price: b.close, reason: 'rule' }
         else if (p.max_until && t + H4 >= p.max_until) exit = { price: b.close, reason: 'time' }
         if (!exit) continue
         const proceeds = p.qty * exit.price * (1 - FEE)
@@ -408,7 +437,9 @@ async function replay(symbols: string[], capital: number, from: number): Promise
         const bars = series.get(s)
         const i = index.get(s)?.get(t)
         if (!bars || i === undefined || i + 1 >= bars.length || open[k].has(s) || open[k].size >= maxOpen(sizing)) continue
-        const { plan, source } = k === 'learn' ? copyBest(follow, bars, i) : { plan: signalFor(k, bars, i), source: null }
+        const r = decide(s)
+        if (r.i === undefined) continue
+        const { plan, source } = k === 'learn' ? copyBest(follow, bars, i) : { plan: signalFor(k, r.bars, r.i), source: null }
         if (!plan) continue
         const entry = bars[i + 1].open
         const levels = planPrices(plan, entry)
@@ -425,7 +456,7 @@ async function replay(symbols: string[], capital: number, from: number): Promise
           size,
           sl: levels.sl,
           tp: Number.isFinite(levels.tp) ? levels.tp : null,
-          max_until: plan.maxBars ? entryTime + plan.maxBars * H4 : null,
+          max_until: plan.maxBars ? entryTime + plan.maxBars * (isDaily ? DAY : H4) : null,
           exit_rule: plan.exitRule ?? null,
           source,
           note: source ? `Copiado de ${tag(source)}: ${plan.note}` : plan.note,
@@ -492,6 +523,20 @@ async function closedBars(symbol: string): Promise<{ bars: Bar[]; live: Bar } | 
   return { bars: all.slice(0, -1), live: all[all.length - 1] }
 }
 
+/** Velas diarias cerradas (se vuelven a pedir solo cuando cierra un día nuevo) */
+const dailyCache = new Map<string, Bar[]>()
+async function closedDailyBars(symbol: string): Promise<Bar[] | null> {
+  const cached = dailyCache.get(symbol)
+  if (cached && cached[cached.length - 1].time * 1000 + 2 * DAY > Date.now()) return cached
+  const res = await fetch(`${REST}/klines?symbol=${symbol}&interval=1d&limit=120`, { cache: 'no-store' })
+  if (!res.ok) return null
+  const all = ((await res.json()) as Parameters<typeof toBar>[0][]).map(toBar)
+  if (all.length < 62) return null
+  const bars = all.slice(0, -1) // sin la vela de hoy, que todavía se está formando
+  dailyCache.set(symbol, bars)
+  return bars
+}
+
 function closePosition(p: BotPosition, price: number, reason: string) {
   const proceeds = p.qty * price * (1 - FEE)
   const pnl = proceeds - p.size
@@ -523,10 +568,26 @@ async function safeNotify(html: string) {
 }
 
 /** La señal de cada competidor en la vela i (por defecto, la última cerrada). null = no compra */
-function signalFor(s: Competitor, bars: Bar[], i = bars.length - 1): EntryPlan | null {
-  if (s === 'rebal' || s === 'learn' || s === 'learn2' || s === 'half') return null // no tienen señal propia: se reacomodan o copian a otros
+function signalFor(k: Competitor, bars: Bar[], i = bars.length - 1): EntryPlan | null {
+  const s = rulesOf(k) // los diarios usan las mismas reglas, con las velas diarias que les pasan
+  if (s === 'rebal' || s === 'learn' || s === 'learn2' || s in HALVES) return null // no tienen señal propia: se reacomodan o copian a otros
   if (s === 'trend') return trendSignal(bars, i) ? { slPct: STOP_LOSS, note: 'La amarilla cruzó hacia arriba a la azul: empieza una subida' } : null
-  return PLANNED[s](bars, i)
+  return PLANNED[s as PlannedStrategy](bars, i)
+}
+
+/**
+ * Competidores nuevos (agregados con la competencia ya corriendo): entran hoy con lo mismo con que empezaron los demás
+ * (tu cartera real, si empezó así, o el capital en USDT). Así no hay que borrar la competencia para sumarlos.
+ */
+function joinLate() {
+  const seed = getSeed()
+  for (const k of COMPETITOR_KEYS) {
+    if (getMeta(`arena_cash_${k}`) !== null) continue
+    if (seed.length) {
+      setCash(k, Number(getMeta('arena_hold_cash') ?? 0))
+      for (const x of seed) insertPosition(k, adopt(k, x))
+    } else setCash(k, getCapital())
+  }
 }
 
 let running = false
@@ -541,10 +602,14 @@ export async function runBot() {
     const open = listPositions()
     const symbols = [...new Set([...open.map((p) => p.symbol), ...filter])]
     const data = new Map<string, { bars: Bar[]; live: Bar }>()
+    const dailyData = new Map<string, Bar[]>()
     for (const s of symbols) {
       const d = await closedBars(s)
       if (d) data.set(s, d)
+      const dd = await closedDailyBars(s)
+      if (dd) dailyData.set(s, dd)
     }
+    joinLate()
 
     // 1. Salidas
     for (const p of open) {
@@ -560,7 +625,15 @@ export async function runBot() {
       } else if (p.tp && Math.max(...since.map((b) => b.high)) >= p.tp) {
         reason = 'tp'
         price = Math.max(p.tp, d.live.close)
-      } else if ((p.source ?? p.strategy) === 'trend' && !above(d.bars, last) && d.bars[last].time * 1000 >= p.entry_time) reason = 'cross'
+      } else if (p.strategy in DAILY) {
+        // Diarios: deciden con la última vela de 1 día cerrada después de la compra
+        const dd = dailyData.get(p.symbol)
+        const lastD = dd ? dd.length - 1 : -1
+        if (dd && dd[lastD].time * 1000 + DAY > p.entry_time) {
+          if (rulesOf(p.strategy) === 'trend' && !above(dd, lastD)) reason = 'cross'
+          else if (p.exit_rule && exitBy(p.exit_rule, dd, lastD)) reason = 'rule'
+        }
+      } else if (rulesOf(p.source ?? p.strategy) === 'trend' && !above(d.bars, last) && d.bars[last].time * 1000 >= p.entry_time) reason = 'cross'
       else if (p.exit_rule && d.bars[last].time * 1000 > p.entry_time && exitBy(p.exit_rule, d.bars, last)) reason = 'rule'
       else if (p.max_until && Date.now() >= p.max_until) reason = 'time'
       if (!reason) continue
@@ -591,12 +664,13 @@ export async function runBot() {
     for (const strategy of COMPETITOR_KEYS) {
       for (const symbol of filter) {
         const d = data.get(symbol)
-        if (!d) continue
+        const bars = strategy in DAILY ? dailyData.get(symbol) : d?.bars // los diarios miran velas de 1 día
+        if (!d || !bars) continue
         const key = `${strategy}:${symbol}`
-        const candle = d.bars[d.bars.length - 1].time
+        const candle = bars[bars.length - 1].time
         if (seen[key] === candle) continue // esa vela ya la revisó
         seen[key] = candle
-        const { plan, source } = strategy === 'learn' ? copyBest(follow, d.bars, d.bars.length - 1) : { plan: signalFor(strategy, d.bars), source: null }
+        const { plan, source } = strategy === 'learn' ? copyBest(follow, d.bars, d.bars.length - 1) : { plan: signalFor(strategy, bars), source: null }
         if (!plan) continue
         const held = listPositions(strategy)
         if (held.length >= maxOpen(sizing) || held.some((p) => p.symbol === symbol)) continue
@@ -614,7 +688,7 @@ export async function runBot() {
           size,
           sl: levels.sl,
           tp: Number.isFinite(levels.tp) ? levels.tp : null,
-          max_until: plan.maxBars ? Date.now() + plan.maxBars * H4 : null,
+          max_until: plan.maxBars ? Date.now() + plan.maxBars * (strategy in DAILY ? DAY : H4) : null,
           exit_rule: plan.exitRule ?? null,
           source,
           note: source ? `Copiado de ${tag(source)}: ${plan.note}` : plan.note,
@@ -649,7 +723,8 @@ export async function runBot() {
 
 export const LEARN_BARS = 84 // 14 días de velas de 4 h
 const LEARN_TOP = 3
-const LEARN_FROM: Competitor[] = COMPETITOR_KEYS.filter((k) => k !== 'learn' && k !== 'learn2' && k !== 'rebal' && k !== 'half')
+// (sin los que copian carteras ni los diarios: Aprende copia señales de velas de 4 h)
+const LEARN_FROM: Competitor[] = COMPETITOR_KEYS.filter((k) => k !== 'learn' && k !== 'learn2' && k !== 'rebal' && !(k in HALVES) && !(k in DAILY))
 export const LEARN2_BARS = 180 // 30 días de velas de 4 h
 const MIRROR_TOLERANCE = 0.25 // solo ajusta una moneda si se desvía más de 25% de lo que debería tener
 export type LearnLog = { ts: number; follow: Competitor[] }
@@ -780,17 +855,16 @@ function applyRebalance(open: Map<string, SimPosition>, target: Map<string, numb
 }
 
 /** 🤝 Mitad y mitad: lo que debería tener de cada moneda = la mitad copiada de Tortugas + la mitad de Tendencia */
-const HALF_FROM: Competitor[] = ['turtle', 'trend']
-const HALF_NOTE = 'Mitad copiada de 🐢 Tortugas y mitad de 📈 Tendencia'
 function halfTargets(
+  from: Competitor[],
   of: (k: Competitor) => [Iterable<{ symbol: string; qty: number; entry: number }>, number],
   prices: Map<string, number>,
   myTotal: number,
 ) {
   const target = new Map<string, number>()
-  for (const k of HALF_FROM) {
+  for (const k of from) {
     const [open, cash] = of(k)
-    for (const [s, v] of mirrorTargets(open, cash, prices, myTotal / HALF_FROM.length)) target.set(s, (target.get(s) ?? 0) + v)
+    for (const [s, v] of mirrorTargets(open, cash, prices, myTotal / from.length)) target.set(s, (target.get(s) ?? 0) + v)
   }
   return target
 }
@@ -799,7 +873,8 @@ function halfTargets(
 function mirrorLive(prices: Map<string, number>) {
   const leader = learn2Leader()
   syncMirror('learn2', prices, (total) => (leader ? mirrorTargets(listPositions(leader), getCash(leader), prices, total) : new Map()), leader ? `Copia la cartera de ${tag(leader)}` : '')
-  syncMirror('half', prices, (total) => halfTargets((k) => [listPositions(k), getCash(k)], prices, total), HALF_NOTE)
+  for (const [k, h] of Object.entries(HALVES) as [Competitor, NonNullable<(typeof HALVES)[Competitor]>][])
+    syncMirror(k, prices, (total) => halfTargets(h.from, (x) => [listPositions(x), getCash(x)], prices, total), h.note)
 }
 
 function syncMirror(k: Competitor, prices: Map<string, number>, targetFor: (total: number) => Map<string, number>, note: string) {

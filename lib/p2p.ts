@@ -97,6 +97,8 @@ export async function recordP2P() {
     const { snapshot } = await takeSnapshot()
     saveSnapshot(snapshot)
     await checkAlerts(snapshot)
+    const { checkAdvice } = await import('./p2p-advisor') // (import tardío: el consejero también importa este archivo)
+    await checkAdvice()
   } catch (e) {
     console.error('[p2p] Error al guardar el precio:', e)
   }

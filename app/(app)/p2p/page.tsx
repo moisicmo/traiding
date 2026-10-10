@@ -5,6 +5,8 @@ import { PageHeader } from '@/components/page-header'
 import { P2PChart } from '@/components/p2p-chart'
 import { buildCandles, P2P_INTERVALS, type P2PInterval, type P2PSide } from '@/lib/p2p-candles'
 import { P2PAlerts } from '@/components/p2p-alerts'
+import { advise, listP2POrders, p2pSummary, recentSignal, type Advice, type P2POrder, type P2PSummary } from '@/lib/p2p-advisor'
+import { hasBinanceKeys } from '@/lib/binance-account'
 
 export const metadata = { title: 'P2P · Trading' }
 
@@ -34,12 +36,19 @@ export default async function P2PPage({ searchParams }: { searchParams: Promise<
   const alerts = listAlerts()
   const s = live?.snapshot
   const spread = s ? s.buy_best - s.sell_best : 0
+  // Tu historial P2P y el consejo (con el precio de este momento)
+  const orders = hasBinanceKeys() ? listP2POrders() : []
+  const summary = orders.length ? p2pSummary(orders) : null
+  const advice = advise(s ? [...week, s] : week, summary)
+  const signal = recentSignal()
 
   return (
     <main className="safe-top mx-auto w-full max-w-2xl px-4 py-6">
       <PageHeader title="P2P USDT ↔ Bs" subtitle={`Binance P2P · precios para ${bs(P2P_AMOUNT)} Bs`} refresh />
 
       {error && <p className="mt-6 rounded-xl bg-down/15 p-4 text-down">{error}</p>}
+
+      {advice && <AdviceCard advice={advice} signal={signal} />}
 
       {s && (
         <>
@@ -90,6 +99,8 @@ export default async function P2PPage({ searchParams }: { searchParams: Promise<
       <h2 className="mt-8 font-semibold">¿A qué hora se abre más la diferencia?</h2>
       <HourlySpread rows={week} />
 
+      {summary && <MyP2P summary={summary} orders={orders} />}
+
       <h2 className="mt-8 font-semibold">Alertas</h2>
       {s && <P2PAlerts alerts={alerts} suggestion={{ buy: s.buy_best, sell: s.sell_best }} />}
 
@@ -103,6 +114,93 @@ export default async function P2PPage({ searchParams }: { searchParams: Promise<
         </>
       )}
     </main>
+  )
+}
+
+const ACTION = {
+  buy: { icon: '🟢', box: 'border-up/50 bg-up/10', text: 'text-up', word: '¡COMPRA!' },
+  sell: { icon: '🔴', box: 'border-down/50 bg-down/10', text: 'text-down', word: '¡VENDE!' },
+  wait: { icon: '⏸️', box: 'border-border bg-panel', text: 'text-muted', word: 'Espera' },
+} as const
+
+const usdt = (n: number) => n.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const ago = (h: number) => (h < 1 ? `hace ${Math.max(1, Math.round(h * 60))} min` : `hace ${Math.round(h)} h`)
+
+/** 🧭 El consejo de ahora + si el último aviso todavía vale (por si no pudiste actuar en ese momento) */
+function AdviceCard({ advice, signal }: { advice: Advice; signal: ReturnType<typeof recentSignal> }) {
+  const a = ACTION[advice.action]
+  const nowPrice = signal ? (signal.action === 'buy' ? advice.buy : advice.sell) : 0
+  return (
+    <section className={clsx('mt-6 rounded-2xl border p-4', a.box)}>
+      <p className="text-xs font-medium uppercase tracking-wide text-muted">🧭 Consejero P2P · ahora</p>
+      <p className={clsx('mt-1 text-2xl font-bold', a.text)}>
+        {a.icon} {advice.title}
+      </p>
+      <ul className="mt-2 list-disc space-y-1 pl-5 text-[15px] leading-relaxed">
+        {advice.reasons.map((r) => (
+          <li key={r}>{r}</li>
+        ))}
+      </ul>
+      {signal && (
+        <p className="mt-3 rounded-xl bg-bg/60 p-3 text-sm">
+          Te avisé <b>{ACTION[signal.action].word}</b> {ago(signal.hours)} a <b className="tabular">{bs(signal.price)} Bs</b>. Ahora{' '}
+          {signal.action === 'buy' ? 'cuesta' : 'pagan'} <b className="tabular">{bs(nowPrice)} Bs</b>:{' '}
+          {signal.action === advice.action ? (
+            <b className={a.text}>todavía es buen momento ✅</b>
+          ) : (
+            <b>ese momento ya pasó, ahora conviene {advice.action === 'wait' ? 'esperar' : ACTION[advice.action].word.toLowerCase()}</b>
+          )}
+        </p>
+      )}
+      <p className="mt-2 text-xs text-muted">Solo es un consejo con reglas simples (compara con la última semana). Tú decides y operas en Binance.</p>
+    </section>
+  )
+}
+
+/** Tus compras y ventas P2P (leídas de Binance con tu llave de solo lectura) */
+function MyP2P({ summary, orders }: { summary: P2PSummary; orders: P2POrder[] }) {
+  return (
+    <>
+      <h2 className="mt-8 font-semibold">Tus compras y ventas P2P</h2>
+      <section className="mt-3 grid grid-cols-3 gap-3">
+        <Stat label="USDT de P2P sin vender" value={usdt(summary.held)} />
+        <Stat label="Te costaron (promedio)" value={summary.avgCost ? `${bs(summary.avgCost)} Bs` : '—'} />
+        <Stat
+          label="Ganado al vender"
+          value={`${summary.realized >= 0 ? '+' : '−'}${bs(Math.abs(summary.realized))} Bs`}
+          className={summary.realized > 0 ? 'text-up' : summary.realized < 0 ? 'text-down' : undefined}
+        />
+      </section>
+      <ul className="mt-3 divide-y divide-border rounded-2xl border border-border bg-panel px-4">
+        {orders.slice(0, 15).map((o) => (
+          <li key={o.order_number} className={clsx('flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2.5 text-sm', o.status !== 'COMPLETED' && 'opacity-50')}>
+            <span className={clsx('rounded px-2 py-0.5 text-xs font-semibold', o.trade_type === 'BUY' ? 'bg-up/15 text-up' : 'bg-down/15 text-down')}>
+              {o.trade_type === 'BUY' ? 'Compra' : 'Venta'}
+            </span>
+            <span className="tabular font-semibold">{usdt(o.amount)} USDT</span>
+            <span className="tabular text-muted">
+              a {bs(o.unit_price)} = {bs(o.total)} Bs
+            </span>
+            <span className="w-full text-xs text-muted sm:ml-auto sm:w-auto">
+              {new Date(o.created).toLocaleString('es-BO', { timeZone: 'America/La_Paz', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              {o.status !== 'COMPLETED' && ` · ${o.status === 'CANCELLED' ? 'cancelada' : o.status.toLowerCase()}`}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-xs text-muted">
+        «Sin vender» son los USDT que compraste en P2P y no vendiste en P2P (aunque después los hayas usado en otra cosa).
+      </p>
+    </>
+  )
+}
+
+function Stat({ label, value, className }: { label: string; value: string; className?: string }) {
+  return (
+    <div className="rounded-2xl border border-border bg-panel p-3">
+      <p className="text-xs text-muted">{label}</p>
+      <p className={clsx('tabular mt-1 text-lg font-semibold', className)}>{value}</p>
+    </div>
   )
 }
 

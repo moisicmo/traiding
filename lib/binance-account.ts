@@ -167,3 +167,28 @@ export type BinanceTrade = {
 /** Tus operaciones ejecutadas de un par, desde el id indicado (hasta 1000 por pedido) */
 export const getMyTrades = (symbol: string, fromId: number) =>
   signed<BinanceTrade[]>('GET', '/api/v3/myTrades', { symbol, fromId, limit: 1000 })
+
+// ===== P2P: tus compras y ventas de USDT con otras personas =====
+
+export type P2POrderRaw = {
+  orderNumber: string
+  tradeType: 'BUY' | 'SELL' // desde tu lado: BUY = compraste USDT
+  asset: string
+  fiat: string
+  amount: string // cantidad de USDT
+  totalPrice: string // bolivianos
+  unitPrice: string
+  orderStatus: string // COMPLETED, CANCELLED, ...
+  createTime: number
+  counterPartNickName: string
+}
+
+/** Tu historial P2P de un tipo (compras o ventas) en un rango de fechas (Binance permite hasta 30 días por pedido) */
+export const getP2POrders = (tradeType: 'BUY' | 'SELL', startTimestamp: number, endTimestamp: number, page = 1) =>
+  signed<{ data?: P2POrderRaw[]; total?: number }>('GET', '/sapi/v1/c2c/orderMatch/listUserOrderHistory', {
+    tradeType,
+    startTimestamp,
+    endTimestamp,
+    page,
+    rows: 100,
+  })

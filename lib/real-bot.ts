@@ -224,6 +224,28 @@ export function resumeReal() {
   if (s) save({ ...s, enabled: true, stopped: '', lastError: '' })
 }
 
+/**
+ * ➕ Darle más fondos: suma USDT de tu cuenta al presupuesto del bot (desde ahí lo invierte junto con lo demás).
+ * Solo si ese USDT está libre en Spot y no es ya del bot.
+ */
+export async function addFunds(amount: number) {
+  const s = getReal()
+  if (!s) throw new BinanceError('Primero empieza el bot')
+  const free = (await freeBalances()).get('USDT') ?? 0
+  const available = free - s.cash // el USDT libre que NO es del bot
+  if (available + 0.01 < amount)
+    throw new BinanceError(
+      `Hay ${Math.max(0, available).toFixed(2)} USDT libres en Spot que no son del bot. Si los compraste en P2P, pásalos de la billetera Fondos a Spot.`,
+    )
+  s.cash += amount
+  s.budget += amount // así la ganancia sigue siendo justa: lo que pusiste no cuenta como ganancia
+  s.peak += amount
+  save(s)
+  await safeNotify(`➕ <b>${tagMode()}: recibió ${amount.toFixed(2)} USDT más</b>
+Ahora maneja ${s.budget.toFixed(2)} USDT en total (lo que pusiste).`)
+  await runReal()
+}
+
 /** Botón de pánico: vende todo lo del bot y lo apaga */
 export async function sellAllReal() {
   const s = getReal()

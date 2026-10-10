@@ -8,7 +8,7 @@ import { PageHeader } from '@/components/page-header'
 import { BotTabs } from '@/components/bot-tabs'
 import { CoinIcon } from '@/components/coin-icon'
 import { SubmitButton } from '@/components/submit-button'
-import { panic, pause, reset, resume, start } from './actions'
+import { add, panic, pause, reset, resume, start } from './actions'
 
 export const metadata = { title: 'Bot real · Trading' }
 
@@ -144,8 +144,22 @@ export default async function RealPage() {
         )}
       </section>
 
+      <Card title="➕ Darle más fondos" subtitle="Suma USDT de tu cuenta: desde ahí el bot lo invierte junto con lo demás" className="mt-4">
+        {startError && <p className="mb-3 rounded-lg bg-down/15 p-3 text-sm text-down">{startError}</p>}
+        <form action={add} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <label className="block text-sm text-muted sm:w-48">
+            Monto (USDT)
+            <input name="amount" inputMode="decimal" placeholder="500" className="input tabular mt-1" />
+          </label>
+          <SubmitButton pending="Agregando…" className="rounded-lg border border-border bg-bg px-5 py-2.5 text-sm font-semibold disabled:opacity-60">
+            ➕ Agregar
+          </SubmitButton>
+        </form>
+        <p className="mt-2 text-xs text-muted">Tiene que estar libre en tu billetera Spot (lo del P2P llega a Fondos: pásalo a Spot primero).</p>
+      </Card>
+
       <div className="mt-4 grid gap-4 sm:grid-cols-3">
-        <Kpi label="Vale ahora" value={`${value.toFixed(2)} USDT`} sub={`empezó con ${s.budget} USDT`} />
+        <Kpi label="Vale ahora" value={`${value.toFixed(2)} USDT`} sub={`pusiste ${s.budget.toFixed(2)} USDT en total`} />
         <Kpi label="Ganancia" value={money(gain)} sub={`${money((gain / s.budget) * 100)}%`} className={tone(gain)} />
         <Kpi label="Freno" value={`${brake.toFixed(2)} USDT`} sub={`si baja de esto vende todo (mejor momento: ${s.peak.toFixed(2)})`} />
       </div>

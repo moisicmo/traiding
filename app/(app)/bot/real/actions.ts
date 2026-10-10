@@ -5,7 +5,7 @@ import { requireUser } from '@/auth'
 import { explainError } from '@/lib/binance-account'
 import { setMeta } from '@/lib/db'
 import { COMPETITOR_KEYS, type Competitor } from '@/lib/paper-bot'
-import { pauseReal, resetReal, resumeReal, sellAllReal, startReal } from '@/lib/real-bot'
+import { addFunds, pauseReal, resetReal, resumeReal, sellAllReal, startReal } from '@/lib/real-bot'
 
 export async function start(form: FormData) {
   await requireUser()
@@ -45,5 +45,18 @@ export async function panic() {
 export async function reset() {
   await requireUser()
   resetReal()
+  revalidatePath('/bot/real')
+}
+
+export async function add(form: FormData) {
+  await requireUser()
+  const amount = Number(String(form.get('amount')).replace(',', '.'))
+  setMeta('real_start_error', '')
+  try {
+    if (!(amount >= 5 && amount <= 100_000)) throw new Error('El monto tiene que ser entre 5 y 100.000 USDT')
+    await addFunds(amount)
+  } catch (e) {
+    setMeta('real_start_error', explainError(e))
+  }
   revalidatePath('/bot/real')
 }

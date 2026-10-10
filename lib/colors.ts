@@ -1,3 +1,5 @@
+import type { Competitor } from './paper-bot'
+
 // Colores de los gráficos. En un archivo aparte para que también los lean las páginas del servidor
 // (un componente 'use client' no puede exportar valores normales a una página del servidor).
 export const COLORS = {
@@ -10,3 +12,23 @@ export const COLORS = {
   sma20: '#f5c542',
   sma50: '#4c8dff',
 }
+
+// Un color por competidor (líneas del gráfico y marquitas); "no tocar" en gris
+export const COMPETITOR_COLORS: Record<Competitor | 'hold', string> = {
+  learn: '#ffffff',
+  learn2: '#e879f9',
+  trendplus: '#7c83ff',
+  trend: COLORS.sma50,
+  poc: '#b98bff',
+  fib: '#ff9f43',
+  smc: '#ff6fae',
+  rsi: '#2ec4b6',
+  boll: '#f25f5c',
+  turtle: '#8bd450',
+  hybrid: '#d4ff3a',
+  half: '#ff8a65',
+  golden: '#c49a6c',
+  rebal: '#5ad1ff',
+  hold: COLORS.muted,
+}
+export const REAL_COLOR = '#f0b90b' // 💰 el bot real (amarillo Binance)

@@ -2,8 +2,10 @@ import clsx from 'clsx'
 import { fmt } from '@/lib/binance'
 import { getMeta } from '@/lib/db'
 import { mySeed } from '@/lib/my-seed'
-import { COMPETITOR_KEYS, COMPETITORS, getStartedAt, isRunning, type Seed } from '@/lib/paper-bot'
-import { getReal, isTestnet, listRealOrders, realConfigured, realValue, tradePrices } from '@/lib/real-bot'
+import { COMPETITOR_KEYS, COMPETITORS, getCapital, getStartedAt, HOLD, isRunning, listEquity, type Competitor, type Seed } from '@/lib/paper-bot'
+import { getReal, isTestnet, listRealEquity, listRealOrders, realConfigured, realValue, tradePrices, type RealState } from '@/lib/real-bot'
+import { COMPETITOR_COLORS, REAL_COLOR } from '@/lib/colors'
+import { EquityCompare, type Curve } from '@/components/equity-compare'
 import { PageHeader } from '@/components/page-header'
 import { BotTabs } from '@/components/bot-tabs'
 import { CoinIcon } from '@/components/coin-icon'
@@ -164,6 +166,14 @@ export default async function RealPage() {
         <Kpi label="Freno" value={`${brake.toFixed(2)} USDT`} sub={`si baja de esto vende todo (mejor momento: ${s.peak.toFixed(2)})`} />
       </div>
 
+      <Card
+        title="📈 Contra los competidores"
+        subtitle="Todos medidos como si hubieran empezado con 200 USDT (lo que agregues después no cuenta como ganancia). Los competidores son de mentira; tu bot, de verdad."
+        className="mt-4"
+      >
+        <RaceChart s={s} />
+      </Card>
+
       <Card title="Lo que tiene ahora" subtitle="Solo lo que es del bot (no el resto de tu cuenta)" className="mt-4">
         <ul className="space-y-2 text-sm">
           <li className="flex items-center justify-between rounded-xl bg-bg p-3">
@@ -210,6 +220,31 @@ export default async function RealPage() {
       </Card>
     </Shell>
   )
+}
+
+const BASE = 200
+
+/** El bot real contra el competidor que copia, los 3 que van mejor y "no tocar", desde que empezó el bot real */
+function RaceChart({ s }: { s: RealState }) {
+  const real = listRealEquity()
+  if (real.length < 2)
+    return <p className="rounded-xl bg-bg p-4 text-sm text-muted">Guarda una foto por hora: en un par de horas aparece el gráfico.</p>
+  const from = real[0].ts
+  const capital = getCapital() || BASE
+  const equity = listEquity().filter((e) => e.ts >= from)
+  const lineOf = (k: Competitor | 'hold') => equity.filter((e) => e.strategy === k).map((e) => ({ time: e.ts, value: (e.value * BASE) / capital }))
+  const last = (k: Competitor) => lineOf(k).at(-1)?.value ?? 0
+  const best = COMPETITOR_KEYS.filter((k) => k !== s.follow)
+    .sort((a, b) => last(b) - last(a))
+    .slice(0, 3)
+  const name = (k: Competitor) => `${COMPETITORS[k].emoji} ${COMPETITORS[k].label}`
+  const curves: Curve[] = [
+    { label: '💰 Tu bot real', color: REAL_COLOR, points: real.map((r) => ({ time: r.ts, value: r.nav * BASE })) },
+    { label: `${name(s.follow)} (al que copia)`, color: COMPETITOR_COLORS[s.follow], points: lineOf(s.follow) },
+    ...best.map((k) => ({ label: name(k), color: COMPETITOR_COLORS[k], points: lineOf(k) })),
+    { label: `${HOLD.emoji} ${HOLD.label}`, color: COMPETITOR_COLORS.hold, points: lineOf('hold'), dashed: true },
+  ]
+  return <EquityCompare curves={curves} />
 }
 
 function ModeBanner({ testnet }: { testnet: boolean }) {

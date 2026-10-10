@@ -38,13 +38,19 @@ export type RealState = {
   lastRun: number | null
   lastError: string
   stopped: string // por qué se apagó solo (vacío = sigue prendido o lo pausaste tú)
+  // "Cuotas", como un fondo: al empezar, 1 cuota por USDT puesto. Al agregar fondos se compran cuotas al valor de ese momento.
+  // Así valor ÷ cuotas mide cuánto ganó la ESTRATEGIA, sin que los depósitos parezcan ganancia (para compararlo en el gráfico)
+  units?: number
 }
+const unitsOf = (s: RealState) => s.units ?? s.budget
 
 export const getReal = () => JSON.parse(getMeta('real_state') ?? 'null') as RealState | null
 const save = (s: RealState) => setMeta('real_state', JSON.stringify(s))
 
 function ensureTable() {
   db().exec(`
+    -- Una foto por hora: cuánto vale lo del bot y cuántas cuotas tiene (para el gráfico)
+    CREATE TABLE IF NOT EXISTS real_equity (ts INTEGER PRIMARY KEY, value REAL NOT NULL, units REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS real_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL,
       qty REAL NOT NULL, quote REAL NOT NULL, order_id INTEGER NOT NULL, reason TEXT NOT NULL, testnet INTEGER NOT NULL
@@ -55,6 +61,18 @@ export type RealOrder = { id: number; ts: number; symbol: string; side: 'BUY' | 
 export function listRealOrders(limit = 100) {
   ensureTable()
   return (db().prepare('SELECT * FROM real_orders ORDER BY ts DESC LIMIT ?').all(limit) as RealOrder[]).map((r) => ({ ...r }))
+}
+
+/** La historia del bot: valor de UNA cuota (1 al empezar) hora por hora */
+export function listRealEquity() {
+  ensureTable()
+  return (db().prepare('SELECT ts, value / units AS nav FROM real_equity ORDER BY ts').all() as { ts: number; nav: number }[]).map((r) => ({ ...r }))
+}
+
+function snapshotReal(value: number, units: number) {
+  ensureTable()
+  const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000
+  db().prepare('INSERT OR REPLACE INTO real_equity (ts, value, units) VALUES (?, ?, ?)').run(hour, value, units)
 }
 
 // ===== Datos del servidor donde opera (testnet o real) =====
@@ -204,6 +222,9 @@ export async function startReal(opts: { follow: Competitor; budget: number; maxL
 
   const s: RealState = { ...opts, enabled: true, cash, holdings, peak: 0, started: Date.now(), lastRun: null, lastError: '', stopped: '' }
   s.peak = realValue(s, prices)
+  s.units = opts.budget
+  ensureTable()
+  db().exec('DELETE FROM real_equity')
   save(s)
   const who = `${COMPETITORS[opts.follow].emoji} ${esc(COMPETITORS[opts.follow].label)}`
   await safeNotify(
@@ -237,6 +258,8 @@ export async function addFunds(amount: number) {
     throw new BinanceError(
       `Hay ${Math.max(0, available).toFixed(2)} USDT libres en Spot que no son del bot. Si los compraste en P2P, pásalos de la billetera Fondos a Spot.`,
     )
+  const value = realValue(s, await tradePrices())
+  s.units = unitsOf(s) + amount / (value / unitsOf(s)) // compra cuotas al valor de ahora
   s.cash += amount
   s.budget += amount // así la ganancia sigue siendo justa: lo que pusiste no cuenta como ganancia
   s.peak += amount
@@ -279,6 +302,7 @@ export async function runReal() {
     const prices = await tradePrices()
     const value = realValue(s, prices)
     s.peak = Math.max(s.peak, value)
+    snapshotReal(value, unitsOf(s))
 
     // 🛑 Freno de pérdida
     if (value < s.peak * (1 - s.maxLoss / 100)) {

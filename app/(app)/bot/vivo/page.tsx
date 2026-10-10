@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { getPrices } from '@/lib/binance-account'
 import { fmt } from '@/lib/binance'
 import { getMeta } from '@/lib/db'
-import { COLORS } from '@/lib/colors'
+import { COLORS, COMPETITOR_COLORS } from '@/lib/colors'
 import {
   boliviaDay,
   COMPETITOR_KEYS,
@@ -53,24 +53,7 @@ const tone = (n: number) => (n > 0 ? 'text-up' : n < 0 ? 'text-down' : 'text-mut
 const when = (ms: number) => new Date(ms).toLocaleString('es-BO', { timeZone: TZ, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const coin = (symbol: string) => symbol.replace('USDT', '')
 
-// Un color por competidor (líneas del gráfico y marquitas); "no tocar" en gris
-const COLOR: Record<Competitor | 'hold', string> = {
-  learn: '#ffffff',
-  learn2: '#e879f9',
-  trendplus: '#7c83ff',
-  trend: COLORS.sma50,
-  poc: '#b98bff',
-  fib: '#ff9f43',
-  smc: '#ff6fae',
-  rsi: '#2ec4b6',
-  boll: '#ffd23f',
-  turtle: '#8bd450',
-  hybrid: '#d4ff3a',
-  half: '#ff8a65',
-  golden: '#c49a6c',
-  rebal: '#5ad1ff',
-  hold: COLORS.muted,
-}
+const COLOR = COMPETITOR_COLORS
 const NAME = (k: Competitor | 'hold') => (k === 'hold' ? `${HOLD.emoji} ${HOLD.label}` : `${COMPETITORS[k].emoji} ${COMPETITORS[k].label}`)
 
 export default async function VivoPage({ searchParams }: { searchParams: Promise<{ top?: string }> }) {

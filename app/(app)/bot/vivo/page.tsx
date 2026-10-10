@@ -15,6 +15,8 @@ import {
   maxOpen,
   getLiveSince,
   getStartedAt,
+  getSeed,
+  type Seed,
   hadOldBot,
   HOLD,
   holdValue,
@@ -40,6 +42,7 @@ import { JobProgress } from '@/components/job-progress'
 import { metrics } from '@/lib/podium'
 import { SubmitButton } from '@/components/submit-button'
 import { SizingFields } from '@/components/sizing-fields'
+import { mySeed } from '@/lib/my-seed'
 
 export const metadata = { title: 'Bot en vivo · Trading' }
 
@@ -81,6 +84,7 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
       </Shell>
     )
   const started = getStartedAt()
+  const mine = await mySeed().catch(() => [] as Seed[]) // para la opción "empezar con mi cartera"
 
   if (!started)
     return (
@@ -115,6 +119,7 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
             </label>
             <FromDate />
             <SizingFields initial={getSizing()} />
+            <MineOption seed={mine} />
             <SubmitButton pending="Empezando…" className="rounded-lg bg-up px-6 py-2.5 font-semibold text-white active:opacity-80 disabled:opacity-60">
               🏁 Empezar la competencia
             </SubmitButton>
@@ -142,6 +147,7 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
   const simulated = liveSince !== null && liveSince - started > 86_400_000 // empezó con simulación del pasado
   const lastRun = Number(getMeta('arena_last_run')) || null
   const error = getMeta('arena_last_error')
+  const seed = getSeed()
 
   // Tabla de posiciones
   const board = [
@@ -169,6 +175,13 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
           desde el {when(started)} ({Math.floor(days)} {Math.floor(days) === 1 ? 'día' : 'días'})
           {simulated && liveSince && <> · simulado hasta el {when(liveSince)}, en vivo desde ahí</>} · {capital} USDT ficticios cada uno · {sizingText} · última revisión{' '}
           {lastRun ? when(lastRun) : '—'}
+          {seed.length > 0 && (
+            <>
+              <br />
+              Todos empezaron con tu cartera real ({seed.map((x) => `${fmt(x.qty)} ${coin(x.symbol)} a ${fmt(x.entry)}`).join(', ')}) y cada uno decide con sus
+              reglas qué hacer. 💤 No tocar = tu cartera tal cual.
+            </>
+          )}
         </p>
         <div className="flex w-full gap-2 sm:ml-auto sm:w-auto">
           <form action={running ? pause : resume} className="flex-1 sm:flex-none">
@@ -372,6 +385,7 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
             </label>
             <FromDate />
             <SizingFields initial={getSizing()} />
+            <MineOption seed={mine} />
             <SubmitButton pending="Empezando…" className="rounded-lg border border-down/50 px-6 py-2.5 font-semibold text-down disabled:opacity-60">
               Borrar todo y empezar de nuevo
             </SubmitButton>
@@ -379,6 +393,23 @@ export default async function VivoPage({ searchParams }: { searchParams: Promise
         </div>
       </details>
     </Shell>
+  )
+}
+
+/** Empezar con lo que tienes comprado en Binance: así ves qué haría cada técnica en tu lugar */
+function MineOption({ seed }: { seed: Seed[] }) {
+  if (!seed.length) return null
+  return (
+    <label className="flex w-full items-start gap-2 rounded-xl bg-bg p-3 text-sm">
+      <input type="checkbox" name="mine" className="mt-1" />
+      <span>
+        <b>Empezar con mi cartera real:</b> {seed.map((x) => `${fmt(x.qty)} ${coin(x.symbol)} (compraste a ${fmt(x.entry)} en promedio)`).join(', ')}.
+        <span className="block text-muted">
+          Cada competidor arranca con eso mismo (y el resto del capital en USDT) y decide con sus reglas si lo vende o lo aguanta. Empieza hoy, sin
+          simulación (la fecha se ignora).
+        </span>
+      </span>
+    </label>
   )
 }
 

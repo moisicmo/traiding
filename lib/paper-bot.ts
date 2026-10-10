@@ -147,7 +147,44 @@ export const listEquity = () => rows<{ ts: number; strategy: string; value: numb
 /** "No tocar": al prender, repartimos el capital entre las monedas del filtro y no las tocamos más */
 export function holdValue(prices: Map<string, number>) {
   const hold = JSON.parse(getMeta('arena_hold') ?? '{}') as Record<string, number>
-  return Object.entries(hold).reduce((s, [symbol, qty]) => s + qty * (prices.get(symbol) ?? 0), 0)
+  // Si empezó con tu cartera real, "no tocar" es tu cartera tal cual: tus monedas + el USDT que sobraba
+  return Number(getMeta('arena_hold_cash') ?? 0) + Object.entries(hold).reduce((s, [symbol, qty]) => s + qty * (prices.get(symbol) ?? 0), 0)
+}
+
+// ===== Empezar con tu cartera real =====
+
+/** Lo que tienes comprado en Binance: cada competidor arranca con lo mismo y decide con sus reglas qué hacer */
+export type Seed = { symbol: string; qty: number; entry: number }
+export const getSeed = () => JSON.parse(getMeta('arena_seed') ?? '[]') as Seed[]
+
+/** Con qué reglas de venta "adopta" tu compra cada competidor (las mismas que usaría si la hubiera comprado él) */
+const INHERIT: Partial<Record<Competitor, Pick<EntryPlan, 'slPct' | 'tpPct' | 'exitRule'>>> = {
+  trend: { slPct: STOP_LOSS }, // y vende al cruce hacia abajo, como siempre
+  turtle: { slPct: 8, exitRule: 'turtle10' },
+  hybrid: { slPct: 8, exitRule: 'turtle10' },
+  golden: { slPct: 10, exitRule: 'death' },
+  trendplus: { exitRule: 'below200' },
+  rsi: { slPct: 8, exitRule: 'rsi70' },
+  boll: { slPct: 5, exitRule: 'bollMid' },
+  poc: { slPct: 4, tpPct: 6 },
+}
+
+function adopt(k: Competitor, seed: Seed): SimPosition {
+  const rule = INHERIT[k] ?? { slPct: 8 }
+  return {
+    symbol: seed.symbol,
+    entry: seed.entry,
+    qty: seed.qty,
+    size: seed.qty * seed.entry,
+    sl: rule.slPct ? seed.entry * (1 - rule.slPct / 100) : 0,
+    tp: rule.tpPct ? seed.entry * (1 + rule.tpPct / 100) : null,
+    max_until: null,
+    exit_rule: rule.exitRule ?? null,
+    source: null,
+    note: `Tu compra real en Binance (a ${px(seed.entry)} en promedio)`,
+    // Como si la hubiera comprado hace 2 velas: así ya revisa la última vela cerrada con sus reglas de venta
+    entry_time: Date.now() - 2 * H4 - 60_000,
+  }
 }
 
 export function portfolioValue(s: Competitor, prices: Map<string, number>) {
@@ -179,13 +216,13 @@ const breathe = () => new Promise((r) => setImmediate(r))
  * Empieza la competencia EN SEGUNDO PLANO y vuelve enseguida: la pantalla muestra la barra de progreso.
  * (La simulación puede tardar un minuto; esperar en la misma petición dejaba la página en blanco.)
  */
-export function startBotInBackground(capital: number, from: number | null, sizing: Sizing = DEFAULT_SIZING) {
+export function startBotInBackground(capital: number, from: number | null, sizing: Sizing = DEFAULT_SIZING, seed: Seed[] = []) {
   const job = getJob()
   if (job?.status === 'running' && Date.now() - job.started < 10 * 60_000) return // ya hay una en marcha
   setMeta('arena_enabled', '0') // el bot en vivo espera a que termine
   setMeta('arena_sizing', JSON.stringify(sizing))
   setMeta('arena_job', JSON.stringify({ status: 'running', pct: 0, message: 'Preparando…', started: Date.now() }))
-  void startBot(capital, from)
+  void startBot(capital, seed.length ? null : from, seed)
     .then(() => setMeta('arena_job', JSON.stringify({ status: 'done', pct: 100, message: 'Listo', started: Date.now() })))
     .catch((e) => {
       console.error('[bot] No se pudo empezar la competencia:', e)
@@ -193,7 +230,7 @@ export function startBotInBackground(capital: number, from: number | null, sizin
     })
 }
 
-export async function startBot(capital: number, from: number | null = null) {
+export async function startBot(capital: number, from: number | null = null, seed: Seed[] = []) {
   ensureTables()
   progress(2, 'Revisando qué monedas pasan el filtro de seguridad…', true)
   const coins = (await getMarket()).coins
@@ -202,6 +239,8 @@ export async function startBot(capital: number, from: number | null = null) {
   setMeta('arena_last_error', '')
   setMeta('arena_live_since', String(Date.now()))
   setMeta('bot_enabled', '0') // apaga el bot de la versión anterior
+  setMeta('arena_seed', JSON.stringify(seed))
+  setMeta('arena_hold_cash', '0')
 
   let summary = ''
   const fromDate = from ? new Date(from).toLocaleDateString('es-BO', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
@@ -210,8 +249,19 @@ export async function startBot(capital: number, from: number | null = null) {
     setMeta('arena_started', String(from))
   } else {
     const hold: Record<string, number> = {}
-    for (const c of coins) hold[c.symbol] = ((capital / coins.length) * (1 - FEE)) / c.price
-    for (const s of COMPETITOR_KEYS) setCash(s, capital)
+    if (seed.length) {
+      // Tu cartera real: todos arrancan con tus monedas (al precio que pagaste) y el resto en USDT
+      const cash = Math.max(0, capital - seed.reduce((sum, x) => sum + x.qty * x.entry, 0))
+      for (const x of seed) hold[x.symbol] = x.qty
+      setMeta('arena_hold_cash', String(cash))
+      for (const s of COMPETITOR_KEYS) {
+        setCash(s, cash)
+        for (const x of seed) insertPosition(s, adopt(s, x))
+      }
+    } else {
+      for (const c of coins) hold[c.symbol] = ((capital / coins.length) * (1 - FEE)) / c.price
+      for (const s of COMPETITOR_KEYS) setCash(s, capital)
+    }
     setMeta('arena_seen', '{}')
     setMeta('arena_learn_follow', '[]')
     setMeta('arena_learn_log', '[]')
@@ -230,6 +280,7 @@ export async function startBot(capital: number, from: number | null = null) {
     `🏁 <b>Empieza la competencia (dinero de mentira)</b>\n` +
       `Cada uno con ${capital} USDT ficticios en ${coins.length} monedas:\n` +
       `${COMPETITOR_KEYS.map((s) => `${COMPETITORS[s].emoji} ${COMPETITORS[s].label}`).join(' · ')} · ${HOLD.emoji} ${HOLD.label}` +
+      (seed.length ? `\n\nTodos empiezan con tu cartera real: ${seed.map((x) => `${x.qty} ${esc(coinOf(x.symbol))} a ${px(x.entry)}`).join(', ')}.` : '') +
       (summary ? `\n\n<b>Simulación desde el ${fromDate}:</b>\n${summary}\n\nDesde ahora sigue en vivo.` : ''),
   )
   await runBot() // por si ya hay señales

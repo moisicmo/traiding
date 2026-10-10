@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { requireUser } from '@/auth'
 import { pauseBot, resumeBot, sellAll, startBotInBackground, type Sizing } from '@/lib/paper-bot'
+import { mySeed } from '@/lib/my-seed'
 
 export async function start(form: FormData) {
   await requireUser()
@@ -20,7 +21,9 @@ export async function start(form: FormData) {
     amount: amount >= 5 && amount <= capital ? amount : 100,
     risk: risk >= 0.5 && risk <= 10 ? risk : 2,
   }
-  if (capital >= 20 && capital <= 1_000_000) startBotInBackground(capital, valid ? from : null, sizing)
+  // "Empezar con mi cartera": todos arrancan con tus monedas reales (y empieza hoy, sin simulación)
+  const seed = form.get('mine') === 'on' ? await mySeed() : []
+  if (capital >= 20 && capital <= 1_000_000) startBotInBackground(capital, valid ? from : null, sizing, seed)
   revalidatePath('/bot/vivo')
 }
 

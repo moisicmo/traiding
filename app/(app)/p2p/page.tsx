@@ -11,6 +11,7 @@ import { hasBinanceKeys } from '@/lib/binance-account'
 export const metadata = { title: 'P2P · Trading' }
 
 const WEEK = 7 * 86_400_000
+const QUARTER = 90 * 86_400_000
 const SIDES: Record<P2PSide, string> = { sell: 'Vender', buy: 'Comprar' }
 
 const bs = (n: number) => n.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 3 })
@@ -98,6 +99,9 @@ export default async function P2PPage({ searchParams }: { searchParams: Promise<
 
       <h2 className="mt-8 font-semibold">¿A qué hora se abre más la diferencia?</h2>
       <HourlySpread rows={week} />
+
+      <h2 className="mt-8 font-semibold">¿Qué día de la semana está más barato el USDT?</h2>
+      <WeekdayPattern rows={listSnapshots(QUARTER)} />
 
       {summary && <MyP2P summary={summary} orders={orders} />}
 
@@ -258,6 +262,81 @@ function HourlySpread({ rows }: { rows: Snapshot[] }) {
         Más diferencia (en amarillo): {top.map((t) => <b key={t.h} className="tabular">{t.h}:00 ({bs(t.spread!)} Bs) </b>)}
       </p>
       <p className="mt-1 text-xs text-muted">Promedio de los últimos 7 días, hora de Bolivia.</p>
+    </div>
+  )
+}
+
+const WEEKDAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+const laPazDay = (ms: number) => new Date(ms - 4 * 3_600_000).toISOString().slice(0, 10) // fecha en Bolivia (UTC−4)
+
+/**
+ * Cada día comparado con los días de alrededor (±3 días): así no confunde "el dólar viene bajando en general"
+ * con "los sábados está más barato". Después promedia por día de la semana.
+ */
+function WeekdayPattern({ rows }: { rows: Snapshot[] }) {
+  const byDay = new Map<string, { sum: number; n: number }>()
+  for (const r of rows) {
+    const d = laPazDay(r.ts)
+    const x = byDay.get(d) ?? { sum: 0, n: 0 }
+    x.sum += r.buy_best
+    x.n++
+    byDay.set(d, x)
+  }
+  const days = [...byDay].filter(([, x]) => x.n >= 100).map(([d, x]) => ({ d, avg: x.sum / x.n })) // días con datos casi completos
+  const diffs = Array.from({ length: 7 }, () => [] as number[])
+  for (const [i, day] of days.entries()) {
+    const around = days.filter((o, j) => j !== i && Math.abs(Date.parse(o.d) - Date.parse(day.d)) <= 3 * 86_400_000)
+    if (around.length < 4) continue
+    const base = around.reduce((s, o) => s + o.avg, 0) / around.length
+    diffs[new Date(`${day.d}T12:00:00Z`).getUTCDay()].push((day.avg / base - 1) * 100)
+  }
+  const weeks = Math.min(...diffs.map((d) => d.length))
+  if (weeks < 2)
+    return (
+      <p className="mt-3 rounded-2xl border border-border bg-panel p-4 text-muted">
+        Se necesitan al menos 2 semanas completas de datos para comparar los días (cada día tiene que aparecer 2 veces). La app los va juntando sola.
+      </p>
+    )
+  const avg = diffs.map((d) => d.reduce((s, x) => s + x, 0) / d.length)
+  const order = [1, 2, 3, 4, 5, 6, 0] // de lunes a domingo
+  const max = Math.max(...avg.map(Math.abs), 0.05)
+  const cheapest = order.reduce((a, b) => (avg[b] < avg[a] ? b : a))
+  const priciest = order.reduce((a, b) => (avg[b] > avg[a] ? b : a))
+  const spread = avg[priciest] - avg[cheapest]
+  return (
+    <div className="mt-3 rounded-2xl border border-border bg-panel p-4">
+      <ul className="space-y-1.5">
+        {order.map((d) => (
+          <li key={d} className="flex items-center gap-2 text-sm">
+            <span className="w-9 text-muted">{WEEKDAYS[d]}</span>
+            <div className="relative h-4 flex-1">
+              <div className="absolute inset-y-0 left-1/2 w-px bg-border" />
+              <div
+                className={clsx('absolute inset-y-0.5 rounded', avg[d] < 0 ? 'right-1/2 bg-up/70' : 'left-1/2 bg-down/60')}
+                style={{ width: `${(Math.abs(avg[d]) / max) * 50}%` }}
+              />
+            </div>
+            <span className={clsx('tabular w-16 text-right', avg[d] < 0 ? 'text-up' : 'text-down')}>
+              {avg[d] >= 0 ? '+' : '−'}
+              {Math.abs(avg[d]).toFixed(2)}%
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-sm">
+        {spread < 0.3 ? (
+          <>Casi no hay diferencia entre días (menos de 0,3%): el día de la semana no importa mucho.</>
+        ) : (
+          <>
+            El más barato para comprar suele ser el <b className="text-up">{WEEKDAYS[cheapest]}</b> y el más caro el{' '}
+            <b className="text-down">{WEEKDAYS[priciest]}</b> ({spread.toFixed(2)}% de diferencia).
+          </>
+        )}
+      </p>
+      <p className="mt-1 text-xs text-muted">
+        Precio de comprar USDT de cada día comparado con los días de alrededor, últimos 90 días ({weeks} {weeks === 1 ? 'semana' : 'semanas'} como mínimo
+        por día). Con pocas semanas puede ser casualidad.
+      </p>
     </div>
   )
 }

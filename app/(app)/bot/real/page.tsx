@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { fmt } from '@/lib/binance'
 import { getMeta } from '@/lib/db'
 import { mySeed } from '@/lib/my-seed'
-import { COMPETITOR_KEYS, COMPETITORS, getCapital, getStartedAt, HOLD, isRunning, listEquity, type Competitor, type Seed } from '@/lib/paper-bot'
+import { COMPETITOR_KEYS, COMPETITORS, getStartedAt, HOLD, isRunning, listEquity, type Competitor, type Seed } from '@/lib/paper-bot'
 import { getReal, isTestnet, listRealEquity, listRealOrders, realConfigured, realValue, tradePrices, type RealState } from '@/lib/real-bot'
 import { COMPETITOR_COLORS, REAL_COLOR } from '@/lib/colors'
 import { EquityCompare, type Curve } from '@/components/equity-compare'
@@ -168,7 +168,7 @@ export default async function RealPage() {
 
       <Card
         title="📈 Contra los competidores"
-        subtitle="Todos medidos como si hubieran empezado con 200 USDT (lo que agregues después no cuenta como ganancia). Los competidores son de mentira; tu bot, de verdad."
+        subtitle="Todos arrancan desde el mismo punto que tu bot cuando empezó (lo que agregues después no cuenta como ganancia). Los competidores son de mentira; tu bot, de verdad."
         className="mt-4"
       >
         <RaceChart s={s} />
@@ -230,16 +230,25 @@ function RaceChart({ s }: { s: RealState }) {
   if (real.length < 2)
     return <p className="rounded-xl bg-bg p-4 text-sm text-muted">Guarda una foto por hora: en un par de horas aparece el gráfico.</p>
   const from = real[0].ts
-  const capital = getCapital() || BASE
+  const realLine = real.map((r) => ({ time: r.ts, value: r.nav * BASE }))
+  /** Lo que valía tu bot en ese momento (la última foto antes) */
+  const realAt = (ts: number) => realLine.filter((p) => p.time <= ts).at(-1)?.value ?? realLine[0].value
   const equity = listEquity().filter((e) => e.ts >= from)
-  const lineOf = (k: Competitor | 'hold') => equity.filter((e) => e.strategy === k).map((e) => ({ time: e.ts, value: (e.value * BASE) / capital }))
+  // Cada competidor arranca donde estaba tu bot en su primera foto: así se compara la carrera desde la misma largada,
+  // aunque la competencia haya empezado antes (o se haya reiniciado) con otro capital
+  const lineOf = (k: Competitor | 'hold') => {
+    const pts = equity.filter((e) => e.strategy === k)
+    if (!pts.length) return []
+    const scale = realAt(pts[0].ts) / pts[0].value
+    return pts.map((e) => ({ time: e.ts, value: e.value * scale }))
+  }
   const last = (k: Competitor) => lineOf(k).at(-1)?.value ?? 0
   const best = COMPETITOR_KEYS.filter((k) => k !== s.follow)
     .sort((a, b) => last(b) - last(a))
     .slice(0, 3)
   const name = (k: Competitor) => `${COMPETITORS[k].emoji} ${COMPETITORS[k].label}`
   const curves: Curve[] = [
-    { label: '💰 Tu bot real', color: REAL_COLOR, points: real.map((r) => ({ time: r.ts, value: r.nav * BASE })) },
+    { label: '💰 Tu bot real', color: REAL_COLOR, points: realLine },
     { label: `${name(s.follow)} (al que copia)`, color: COMPETITOR_COLORS[s.follow], points: lineOf(s.follow) },
     ...best.map((k) => ({ label: name(k), color: COMPETITOR_COLORS[k], points: lineOf(k) })),
     { label: `${HOLD.emoji} ${HOLD.label}`, color: COMPETITOR_COLORS.hold, points: lineOf('hold'), dashed: true },

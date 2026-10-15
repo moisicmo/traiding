@@ -30,6 +30,8 @@ export const COMPETITOR_COLORS: Record<Competitor | 'hold', string> = {
   hybrid: '#d4ff3a',
   half: '#ff8a65',
   half1d: '#ffc2a8',
+  semaforo: '#00e676',
+  semaforo1d: '#a5d6a7',
   golden: '#c49a6c',
   rebal: '#5ad1ff',
   hold: COLORS.muted,

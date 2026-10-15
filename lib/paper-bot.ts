@@ -13,7 +13,7 @@ import { above, defaultParams, FEE, planPrices, PLANNED, trendSignal, type Plann
 import { db, getMeta, setMeta } from './db'
 import { getPrices } from './binance-account'
 import { getMarket } from './market'
-import { exitBy, type EntryPlan, type ExitRule } from './signals'
+import { exitBy, smaArr, type EntryPlan, type ExitRule } from './signals'
 import { esc, notify } from './telegram'
 
 export const SLOTS = 4 // modo automático: hasta 4 operaciones, 1/4 de la cartera cada una
@@ -64,6 +64,8 @@ export const COMPETITORS = {
   // Van al final a propósito: copian carteras de otros DESPUÉS de que esos otros compraron y vendieron en la vela
   half: { emoji: '🤝', label: 'Mitad y mitad', how: 'La mitad de la plata copia la cartera de Tortugas y la otra mitad la de Tendencia' },
   half1d: { emoji: '🤝', label: 'Mitad y mitad (diaria)', how: 'La mitad copia a Tortugas (diaria) y la otra mitad a Tendencia (diaria)' },
+  semaforo: { emoji: '🚦', label: 'Semáforo', how: 'Como Mitad y mitad, pero solo compra cosas nuevas si BTC está por encima de su promedio de 200 días (mercado sano); si no, solo vende' },
+  semaforo1d: { emoji: '🚦', label: 'Semáforo (diario)', how: 'Como Mitad y mitad (diaria), pero solo compra cosas nuevas si BTC está por encima de su promedio de 200 días' },
   // Último de todos: en cada vela copia la cartera del líder DESPUÉS de que el líder compró y vendió
   learn2: { emoji: '🪞', label: 'Aprende v2', how: 'Cada día elige al mejor de los últimos 30 días y copia su cartera completa (lo que ya tiene comprado, en la misma proporción)' },
 } as const
@@ -73,10 +75,30 @@ export const COMPETITOR_KEYS = Object.keys(COMPETITORS) as Competitor[]
 const DAILY: Partial<Record<Competitor, Competitor>> = { trend1d: 'trend', turtle1d: 'turtle' }
 const rulesOf = (k: Competitor) => DAILY[k] ?? k
 /** 🤝 Los "mitad y mitad": a quiénes copian */
-const HALVES: Partial<Record<Competitor, { from: Competitor[]; note: string }>> = {
+// (los 🚦 semáforos son iguales, pero con BTC enfermo no compran nada nuevo: solo acompañan las ventas)
+const HALVES: Partial<Record<Competitor, { from: Competitor[]; note: string; gated?: boolean }>> = {
   half: { from: ['turtle', 'trend'], note: 'Mitad copiada de 🐢 Tortugas y mitad de 📈 Tendencia' },
   half1d: { from: ['turtle1d', 'trend1d'], note: 'Mitad copiada de 🐢 Tortugas (diaria) y mitad de 📈 Tendencia (diaria)' },
+  semaforo: { from: ['turtle', 'trend'], note: '🚦 Mitad copiada de 🐢 Tortugas y mitad de 📈 Tendencia (con BTC sano)', gated: true },
+  semaforo1d: { from: ['turtle1d', 'trend1d'], note: '🚦 Mitad copiada de 🐢 Tortugas y 📈 Tendencia diarias (con BTC sano)', gated: true },
 }
+
+/** 🚦 ¿BTC estaba sano en ese momento? Última vela diaria de BTC ya cerrada, por encima de su promedio de 200 días */
+function btcGreen(btcDaily: Bar[], atMs: number) {
+  const sma = smaArr(btcDaily, 200)
+  for (let k = btcDaily.length - 1; k >= 0; k--) if (btcDaily[k].time * 1000 + DAY <= atMs) return btcDaily[k].close > sma[k] // NaN = rojo
+  return false
+}
+/** Con el semáforo en rojo: no compra monedas nuevas ni agrega a las que tiene (solo puede vender) */
+function onlySell(target: Map<string, number>, open: Map<string, SimPosition>, prices: Map<string, number>) {
+  const out = new Map<string, number>()
+  for (const [s, v] of target) {
+    const p = open.get(s)
+    if (p) out.set(s, Math.min(v, p.qty * (prices.get(s) ?? p.entry)))
+  }
+  return out
+}
+export const isBtcGreen = () => getMeta('arena_btc_green') === '1'
 export const HOLD = { emoji: '💤', label: 'No tocar', how: 'Reparte todo el primer día entre las monedas del filtro y espera' }
 
 export type BotPosition = {
@@ -330,6 +352,7 @@ async function replay(symbols: string[], capital: number, from: number): Promise
     if (bars.length > 320) series.set(s, bars)
     daily.set(s, await historySince(s, from, '1d'))
   }
+  const btcDaily = daily.get('BTCUSDT') ?? (await historySince('BTCUSDT', from, '1d'))
   const index = new Map([...series].map(([s, bars]) => [s, new Map(bars.map((b, i) => [b.time * 1000, i]))]))
   const indexD = new Map([...daily].map(([s, bars]) => [s, new Map(bars.map((b, i) => [b.time * 1000, i]))]))
   const times = [...new Set([...series.values()].flatMap((bars) => bars.slice(0, -1).map((b) => b.time * 1000)))].filter((t) => t >= from).sort((a, b) => a - b)
@@ -387,7 +410,9 @@ async function replay(symbols: string[], capital: number, from: number): Promise
       const halves = HALVES[k]
       if (halves) {
         const myTotal = cash[k] + [...open[k]].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
-        cash[k] = applyMirror(open[k], halfTargets(halves.from, (x) => [open[x].values(), cash[x]], prices, myTotal), prices, cash[k], t + H4, halves.note)
+        const target = halfTargets(halves.from, (x) => [open[x].values(), cash[x]], prices, myTotal)
+        const gated = halves.gated && !btcGreen(btcDaily, t + H4)
+        cash[k] = applyMirror(open[k], gated ? onlySell(target, open[k], prices) : target, prices, cash[k], t + H4, halves.note)
         const value = cash[k] + [...open[k]].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
         equity.push({ ts: t + H4, strategy: k, value })
         hist[k].push(value)
@@ -525,15 +550,16 @@ async function closedBars(symbol: string): Promise<{ bars: Bar[]; live: Bar } | 
 
 /** Velas diarias cerradas (se vuelven a pedir solo cuando cierra un día nuevo) */
 const dailyCache = new Map<string, Bar[]>()
-async function closedDailyBars(symbol: string): Promise<Bar[] | null> {
-  const cached = dailyCache.get(symbol)
+async function closedDailyBars(symbol: string, limit = 120): Promise<Bar[] | null> {
+  const key = `${symbol}:${limit}`
+  const cached = dailyCache.get(key)
   if (cached && cached[cached.length - 1].time * 1000 + 2 * DAY > Date.now()) return cached
-  const res = await fetch(`${REST}/klines?symbol=${symbol}&interval=1d&limit=120`, { cache: 'no-store' })
+  const res = await fetch(`${REST}/klines?symbol=${symbol}&interval=1d&limit=${limit}`, { cache: 'no-store' })
   if (!res.ok) return null
   const all = ((await res.json()) as Parameters<typeof toBar>[0][]).map(toBar)
   if (all.length < 62) return null
   const bars = all.slice(0, -1) // sin la vela de hoy, que todavía se está formando
-  dailyCache.set(symbol, bars)
+  dailyCache.set(key, bars)
   return bars
 }
 
@@ -706,7 +732,11 @@ export async function runBot() {
     setMeta('arena_seen', JSON.stringify(seen))
 
     // 🪞 Aprende v2 y 🤝 Mitad y mitad: se igualan a las carteras que copian (después de que esas compraron y vendieron)
-    mirrorLive(prices)
+    // 🚦 El semáforo: BTC frente a su promedio de 200 días (si no se pudo leer, se queda como estaba)
+    const btcDaily = await closedDailyBars('BTCUSDT', 260)
+    const green = btcDaily ? btcGreen(btcDaily, Date.now()) : isBtcGreen()
+    setMeta('arena_btc_green', green ? '1' : '0')
+    mirrorLive(prices, green)
 
     snapshot(await getPrices())
     setMeta('arena_last_run', String(Date.now()))
@@ -870,17 +900,25 @@ function halfTargets(
 }
 
 /** En vivo: Aprende v2 y Mitad y mitad se igualan a las carteras que copian */
-function mirrorLive(prices: Map<string, number>) {
+function mirrorLive(prices: Map<string, number>, green: boolean) {
   const leader = learn2Leader()
   syncMirror('learn2', prices, (total) => (leader ? mirrorTargets(listPositions(leader), getCash(leader), prices, total) : new Map()), leader ? `Copia la cartera de ${tag(leader)}` : '')
   for (const [k, h] of Object.entries(HALVES) as [Competitor, NonNullable<(typeof HALVES)[Competitor]>][])
-    syncMirror(k, prices, (total) => halfTargets(h.from, (x) => [listPositions(x), getCash(x)], prices, total), h.note)
+    syncMirror(
+      k,
+      prices,
+      (total, open) => {
+        const target = halfTargets(h.from, (x) => [listPositions(x), getCash(x)], prices, total)
+        return h.gated && !green ? onlySell(target, open, prices) : target
+      },
+      h.note,
+    )
 }
 
-function syncMirror(k: Competitor, prices: Map<string, number>, targetFor: (total: number) => Map<string, number>, note: string) {
+function syncMirror(k: Competitor, prices: Map<string, number>, targetFor: (total: number, open: Map<string, SimPosition>) => Map<string, number>, note: string) {
   const open = new Map(listPositions(k).map((p) => [p.symbol, p as SimPosition]))
   const myTotal = getCash(k) + [...open].reduce((sum, [sym, q]) => sum + q.qty * (prices.get(sym) ?? q.entry), 0)
-  const cash = applyMirror(open, targetFor(myTotal), prices, getCash(k), Date.now(), note)
+  const cash = applyMirror(open, targetFor(myTotal, open), prices, getCash(k), Date.now(), note)
   db().prepare('DELETE FROM arena_positions WHERE strategy = ?').run(k)
   for (const p of open.values()) insertPosition(k, p)
   setCash(k, cash)

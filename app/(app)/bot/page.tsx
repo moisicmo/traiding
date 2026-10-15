@@ -145,9 +145,11 @@ async function OneCoin({
   }
   if (bars.length < 120) return <p className="mt-6 rounded-xl bg-panel p-4 text-muted">Esta moneda tiene muy poco historial para probar.</p>
 
-  const result = runStrategy(bars, strategy, params, interval)
+  // 🚦 El semáforo necesita las velas diarias de Bitcoin (si no se pueden bajar, queda en rojo y no compra)
+  const ctx = { btcDaily: await getHistory('BTCUSDT', '1d').catch(() => undefined) }
+  const result = runStrategy(bars, strategy, params, interval, ctx)
   // Todas con su configuración recomendada, para compararlas en igualdad de condiciones
-  const compare = ALL_STRATEGIES.map((s) => runStrategy(bars, s, defaultParams(s, interval), interval))
+  const compare = ALL_STRATEGIES.map((s) => runStrategy(bars, s, defaultParams(s, interval), interval, ctx))
   const s = result.stats
   const v = verdict(result)
   const isDca = strategy === 'dca' || strategy === 'rebal'
@@ -308,13 +310,14 @@ async function AllCoins({
   interval: BtInterval
   link: (s: string, st?: Strategy) => string
 }) {
+  const btcDaily = await getHistory('BTCUSDT', '1d').catch(() => undefined)
   const rows = (
     await Promise.all(
       coins.map(async (c) => {
         try {
           const bars = await getHistory(c.symbol, interval)
           if (bars.length < 120) return null
-          const results = Object.fromEntries(ALL_STRATEGIES.map((s) => [s, runStrategy(bars, s, defaultParams(s, interval), interval)])) as Record<Strategy, Result>
+          const results = Object.fromEntries(ALL_STRATEGIES.map((s) => [s, runStrategy(bars, s, defaultParams(s, interval), interval, { btcDaily })])) as Record<Strategy, Result>
           const hold = results.bounce.stats.buyHold
           const best = [...ALL_STRATEGIES].sort((a, b) => results[b].stats.total - results[a].stats.total)[0]
           return { ...c, results, hold, best: results[best].stats.total > hold ? best : ('hold' as const) }

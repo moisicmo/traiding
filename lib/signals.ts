@@ -238,7 +238,7 @@ export function trendPlusSignal(bars: Bar[], i: number): EntryPlan | null {
   return { exitRule: 'below200', note: `El precio superó su media de 200 velas por más de 5% (${px(m[i])}): tendencia de fondo alcista` }
 }
 
-export type ExitRule = 'rsi70' | 'bollMid' | 'turtle10' | 'death' | 'below200'
+export type ExitRule = 'rsi70' | 'bollMid' | 'turtle10' | 'death' | 'below200' | 'trendCross'
 
 /** ¿La vela cerrada i dice "vender"? (según la regla de salida de cada técnica) */
 export function exitBy(rule: ExitRule, bars: Bar[], i: number): boolean {
@@ -246,5 +246,6 @@ export function exitBy(rule: ExitRule, bars: Bar[], i: number): boolean {
   if (rule === 'bollMid') return bars[i].close >= smaArr(bars, 20)[i]
   if (rule === 'turtle10') return i >= 10 && bars[i].close < lowest(bars, i - 10, i)
   if (rule === 'below200') return bars[i].close < smaArr(bars, 200)[i] * 0.95
+  if (rule === 'trendCross') return smaArr(bars, 20)[i] < smaArr(bars, 50)[i] // la amarilla cruzó hacia abajo a la azul
   return smaArr(bars, 50)[i] < smaArr(bars, 200)[i] // death cross
 }

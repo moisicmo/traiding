@@ -4,11 +4,11 @@
 // eso sería trampa), cobra 0,1% de comisión por lado y, si en una vela se tocan la ganancia y
 // la pérdida, cuenta la pérdida (somos pesimistas a propósito).
 import type { Bar } from './binance'
-import { bollSignal, exitBy, fibSignal, goldenSignal, hybridSignal, pocSignal, rsiSignal, smcSignal, trendPlusSignal, turtleSignal, type EntryPlan } from './signals'
+import { bollSignal, exitBy, fibSignal, goldenSignal, hybridSignal, pocSignal, rsiSignal, smaArr, smcSignal, trendPlusSignal, turtleSignal, type EntryPlan } from './signals'
 
 export const FEE = 0.001 // 0,1% por operación, como Binance
 
-export type Strategy = 'bounce' | 'trend' | 'trendplus' | 'dca' | 'dip' | 'poc' | 'fib' | 'smc' | 'rsi' | 'boll' | 'turtle' | 'hybrid' | 'half' | 'golden' | 'rebal'
+export type Strategy = 'bounce' | 'trend' | 'trendplus' | 'dca' | 'dip' | 'poc' | 'fib' | 'smc' | 'rsi' | 'boll' | 'turtle' | 'hybrid' | 'half' | 'semaforo' | 'canasta' | 'grid' | 'golden' | 'rebal'
 export type BtInterval = '4h' | '1d'
 
 export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short: string; how: string[] }> = {
@@ -132,6 +132,36 @@ export const STRATEGIES: Record<Strategy, { emoji: string; label: string; short:
       'Cada operación usa la mitad del monto (50 de los 100 USDT).',
     ],
   },
+  semaforo: {
+    emoji: '🚦',
+    label: 'Semáforo (Mitad y mitad + BTC)',
+    short: 'Semáforo',
+    how: [
+      'Igual que "Mitad Tortugas, mitad Tendencia", pero mira primero a Bitcoin, que arrastra a todo el mercado.',
+      '🟢 Si BTC está por encima de su promedio de 200 días, compra normal. 🔴 Si está por debajo, no compra nada nuevo.',
+      'La idea: evitar las falsas alarmas de cuando todo el mercado está cayendo.',
+    ],
+  },
+  canasta: {
+    emoji: '🧺',
+    label: 'Canasta (Tendencia + Tortugas + Tendencia+)',
+    short: 'Canasta',
+    how: [
+      'Reparte la plata en tres: un tercio sigue Tendencia, un tercio Tortugas y un tercio Tendencia+.',
+      'Cuando una se equivoca, las otras amortiguan: no será la que más gane, pero cae menos.',
+      'Cada operación usa un tercio del monto.',
+    ],
+  },
+  grid: {
+    emoji: '📶',
+    label: 'Grid (rejilla de compras y ventas)',
+    short: 'Grid',
+    how: [
+      'Divide el monto en 5 partes. Cada vez que el precio baja 2% compra una parte, y la vende cuando sube 2% desde donde la compró.',
+      'Opera muchas veces y gana cuando el precio va y viene. Si no queda nada comprado y el precio sube, sube la rejilla con él.',
+      'Sufre si el precio cae mucho sin volver: se queda con las 5 partes compradas cada vez más abajo.',
+    ],
+  },
   golden: {
     emoji: '✨',
     label: 'Golden cross 50/200',
@@ -244,7 +274,24 @@ export function lines(bars: Bar[]): Lines {
   return l
 }
 
-export function runStrategy(bars: Bar[], strategy: Strategy, p: Params, interval: BtInterval): Result {
+/** Datos extra que algunas estrategias necesitan: las velas DIARIAS de Bitcoin para el semáforo */
+export type Context = { btcDaily?: Bar[] }
+
+export function runStrategy(bars: Bar[], strategy: Strategy, p: Params, interval: BtInterval, ctx: Context = {}): Result {
+  const done = (trades: Trade[]) => {
+    trades.sort((a, b) => a.exitTime - b.exitTime)
+    return { strategy, trades, stats: tradeStats(bars, trades), equity: tradeEquity(bars, trades) }
+  }
+  if (strategy === 'semaforo') {
+    const green = btcHealthy(bars, ctx.btcDaily ?? [], interval)
+    const gate = (signal: (b: Bar[], i: number) => EntryPlan | null) => (b: Bar[], i: number) => (green(i) ? signal(b, i) : null)
+    return done([...tradePlanned(bars, gate(trendPlanned), p.stake / 2), ...tradePlanned(bars, gate(turtleSignal), p.stake / 2)])
+  }
+  if (strategy === 'canasta') {
+    const third = p.stake / 3
+    return done([...tradeTrend(bars, { ...defaultParams('trend', interval), stake: third }), ...tradePlanned(bars, turtleSignal, third), ...tradePlanned(bars, trendPlusSignal, third)])
+  }
+  if (strategy === 'grid') return done(tradeGrid(bars, p.stake))
   if (strategy === 'dca') return runDca(bars, p, interval)
   if (strategy === 'rebal') return runRebalance(bars, p, interval)
   if (strategy === 'half') {
@@ -334,6 +381,73 @@ export function tradeTrend(bars: Bar[], p: Params, from = START, to = bars.lengt
     trades.push(makeTrade(bars, entryIdx, entry, exit.idx, exit.price, exit.reason, p.stake))
     i = exit.idx
   }
+  return trades
+}
+
+// ===== 🚦 Semáforo: Bitcoin decide si el mercado está sano =====
+
+/** Tendencia como "plan": compra al cruce hacia arriba y vende al cruce hacia abajo, stop −8% */
+const trendPlanned = (bars: Bar[], i: number): EntryPlan | null =>
+  trendSignal(bars, i) ? { slPct: 8, exitRule: 'trendCross', note: 'La amarilla cruzó hacia arriba a la azul' } : null
+
+/**
+ * ¿Al cerrar la vela i de esta moneda, BTC estaba por encima de su promedio de 200 días?
+ * Usa la última vela DIARIA de BTC ya cerrada en ese momento (nunca la del día en curso: sería ver el futuro).
+ */
+function btcHealthy(bars: Bar[], daily: Bar[], interval: BtInterval) {
+  const sma = smaArr(daily, 200)
+  const barSec = interval === '4h' ? 4 * 3600 : 86_400
+  return (i: number) => {
+    const closeAt = bars[i].time + barSec // cuando cierra esta vela (segundos)
+    let lo = 0
+    let hi = daily.length - 1
+    let k = -1
+    while (lo <= hi) {
+      // la última vela diaria que ya cerró: abrió hace 1 día o más
+      const mid = (lo + hi) >> 1
+      if (daily[mid].time + 86_400 <= closeAt) {
+        k = mid
+        lo = mid + 1
+      } else hi = mid - 1
+    }
+    return k >= 0 && daily[k].close > sma[k] // NaN (sin 200 días de datos) = rojo
+  }
+}
+
+// ===== 📶 Grid: compra cada 2% que baja y vende cada parte 2% más arriba =====
+
+const GRID_STEP = 0.02
+const GRID_LEVELS = 5
+
+export function tradeGrid(bars: Bar[], stake: number): Trade[] {
+  const trades: Trade[] = []
+  const lot = stake / GRID_LEVELS
+  const open: { idx: number; price: number }[] = []
+  let anchor = bars[START]?.open ?? 0 // el escalón de referencia
+  for (let j = START; j < bars.length; j++) {
+    const b = bars[j]
+    // 1. Ventas: cada parte se vende 2% arriba de donde se compró (si en la vela se tocan, primero cuenta la compra de abajo: pesimista)
+    for (let k = open.length - 1; k >= 0; k--) {
+      const target = open[k].price * (1 + GRID_STEP)
+      if (open[k].idx < j && b.high >= target) {
+        const price = Math.max(target, b.open)
+        trades.push(makeTrade(bars, open[k].idx, open[k].price, j, price, 'tp', lot))
+        open.splice(k, 1)
+        anchor = open.length ? Math.min(...open.map((o) => o.price)) : price
+      }
+    }
+    // 2. Compras: cada 2% que baja desde el último escalón, hasta 5 partes
+    while (open.length < GRID_LEVELS && b.low <= anchor * (1 - GRID_STEP)) {
+      const price = Math.min(anchor * (1 - GRID_STEP), b.open)
+      open.push({ idx: j, price })
+      anchor = price
+    }
+    // 3. Sin nada comprado y el precio subió: la rejilla sube con él
+    if (!open.length && b.close > anchor) anchor = b.close
+  }
+  // Lo que quedó comprado se cuenta al último precio (así no se esconden las pérdidas)
+  const last = bars.length - 1
+  for (const o of open) trades.push(makeTrade(bars, o.idx, o.price, last, bars[last].close, 'open', lot))
   return trades
 }
 
